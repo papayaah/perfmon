@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Light theme (default) */
+:root {
+  --color-primary: #16a34a;
+  --color-secondary: #2563eb;
+  --color-background: #f8fafc;
+  --color-surface: #ffffff;
+  --color-text: #1e293b;
+  --color-text-muted: #64748b;
+  --color-border: #e2e8f0;
+  color-scheme: light;
+}
+
+/* Dark theme */
+.dark {
+  --color-primary: #00e676;
+  --color-secondary: #2979ff;
+  --color-background: #0f172a;
+  --color-surface: #1e293b;
+  --color-text: #e2e8f0;
+  --color-text-muted: #94a3b8;
+  --color-border: #334155;
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-background antialiased;
+  color: var(--color-text);
+}
+
+/* Fix input text visibility */
+input {
+  color: var(--color-text);
+  background-color: var(--color-surface);
+}
+
+input::placeholder {
+  color: var(--color-text-muted);
+}
+

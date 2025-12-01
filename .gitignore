@@ -1,0 +1,14 @@
+node_modules
+dist
+.DS_Store
+*.log
+lighthouse.json
+.server-port
+.claude
+
+# Tauri
+src-tauri/target/
+src-tauri/Cargo.lock
+
+src-tauri
+.vite
