@@ -1,0 +1,13 @@
+{
+  "buildCommand": "vite build",
+  "outputDirectory": "dist",
+  "devCommand": "vite --port $PORT",
+  "installCommand": "npm install",
+  "framework": "vite",
+  "functions": {
+    "api/analyze.js": {
+      "maxDuration": 300,
+      "memory": 2048
+    }
+  }
+}

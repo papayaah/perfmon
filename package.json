@@ -2,6 +2,7 @@
   "name": "perfmon",
   "version": "1.0.0",
   "description": "Lighthouse performance monitoring tool",
+  "homepage": "https://perfmon.vercel.app",
   "type": "module",
   "scripts": {
     "dev": "npm run dev:server & sleep 1 && npm run dev:client",
@@ -16,11 +17,14 @@
     "tauri:icons": "tauri icon src-tauri/icons/icon.svg"
   },
   "dependencies": {
+    "@sparticuz/chromium": "^141.0.0",
+    "@vercel/analytics": "^1.6.0",
     "clsx": "^2.1.0",
     "idb": "^8.0.0",
     "lucide-preact": "^0.309.0",
     "preact": "^10.19.3",
-    "preact-iso": "^2.6.4"
+    "preact-iso": "^2.6.4",
+    "puppeteer-core": "^24.31.0"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.8.1",

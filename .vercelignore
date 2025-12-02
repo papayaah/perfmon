@@ -1,0 +1,25 @@
+# Tauri build artifacts (huge!)
+src-tauri/target
+src-tauri/Cargo.lock
+
+# Node modules (Vercel installs these)
+node_modules
+
+# Build outputs
+dist
+
+# Development files
+.DS_Store
+*.log
+.server-port
+.claude
+.vite
+
+# Local server (not needed on Vercel)
+server
+
+# Scripts
+scripts
+
+# Specs (not needed for deployment)
+.kiro
