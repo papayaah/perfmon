@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
-import { Activity, Search, History as HistoryIcon, Trash2, AlertCircle, RefreshCw, Smartphone, Monitor, X, Check, ChevronDown, Home } from 'lucide-preact';
+import { Activity, Search, History as HistoryIcon, Trash2, AlertCircle, RefreshCw, Smartphone, Monitor, X, Check, ChevronDown, Home, Copy, CheckCheck } from 'lucide-preact';
 import { ScoreCard } from './components/ScoreCard';
 import { ThemeToggle } from './components/ThemeToggle';
 import { addReport, getReports, deleteReport } from './db';
@@ -606,22 +606,48 @@ function AuditDetails({ category, audits }) {
     );
   }
 
+  const [copiedId, setCopiedId] = useState(null);
+
+  const copyAuditToClipboard = async (audit) => {
+    const text = JSON.stringify(audit, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(audit.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
   return (
     <div class="mt-2 p-4 bg-surface border border-[var(--color-border)] rounded-lg space-y-3 max-h-96 overflow-y-auto animate-in fade-in slide-in-from-top-2 duration-200">
       <h4 class="text-sm font-semibold text-[var(--color-text)] mb-3">{category} Issues ({audits.length})</h4>
       {audits.map((audit) => (
-        <div key={audit.id} class="p-3 bg-background rounded border border-[var(--color-border)]">
+        <div key={audit.id} class="p-3 bg-background rounded border border-[var(--color-border)] relative group">
           <div class="flex items-start justify-between gap-2 mb-2">
             <h5 class="text-sm font-medium text-[var(--color-text)] flex-1">{audit.title}</h5>
-            {audit.score !== null && (
-              <span class={`text-xs font-bold px-2 py-0.5 rounded ${
-                audit.score >= 90 ? 'bg-green-500/20 text-green-600 dark:text-green-400' :
-                audit.score >= 50 ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' :
-                'bg-red-500/20 text-red-600 dark:text-red-400'
-              }`}>
-                {Math.round(audit.score)}
-              </span>
-            )}
+            <div class="flex items-center gap-1">
+              {audit.score !== null && (
+                <span class={`text-xs font-bold px-2 py-0.5 rounded ${
+                  audit.score >= 90 ? 'bg-green-500/20 text-green-600 dark:text-green-400' :
+                  audit.score >= 50 ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' :
+                  'bg-red-500/20 text-red-600 dark:text-red-400'
+                }`}>
+                  {Math.round(audit.score)}
+                </span>
+              )}
+              <button
+                onClick={() => copyAuditToClipboard(audit)}
+                class="p-1.5 text-[var(--color-text-muted)] hover:text-primary hover:bg-primary/10 rounded transition-colors"
+                title="Copy issue details"
+              >
+                {copiedId === audit.id ? (
+                  <CheckCheck size={14} class="text-green-500" />
+                ) : (
+                  <Copy size={14} />
+                )}
+              </button>
+            </div>
           </div>
 
           {audit.description && (
