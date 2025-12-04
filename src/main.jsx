@@ -1,8 +1,12 @@
 import { render } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
+import { inject } from '@vercel/analytics';
 import { App } from './app.jsx';
 import { LandingPage } from './components/LandingPage.jsx';
 import './index.css';
+
+// Initialize Vercel Analytics
+inject();
 
 function Root() {
   const [showApp, setShowApp] = useState(() => {

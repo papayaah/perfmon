@@ -1,4 +1,4 @@
-import { Activity, Zap, History, Smartphone, BarChart3, Shield, Clock, ArrowRight } from 'lucide-preact';
+import { Activity, Zap, History, Smartphone, BarChart3, Shield, Clock, Github } from 'lucide-preact';
 import { useEffect, useState, useRef } from 'preact/hooks';
 import { Fireworks as FireworksJS } from 'fireworks-js';
 
@@ -13,12 +13,23 @@ export function LandingPage({ onGetStarted }) {
               <Activity size={32} class="text-primary" />
               <span class="text-2xl font-bold text-[var(--color-text)]">PerfMon</span>
             </div>
-            <button
-              onClick={onGetStarted}
-              class="px-4 py-2 bg-green-700 text-white rounded-lg font-semibold hover:bg-green-600 transition-colors"
-            >
-              Launch App
-            </button>
+            <div class="flex items-center gap-4">
+              <a
+                href="https://github.com/papayaah/perfmon"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                aria-label="View on GitHub"
+              >
+                <Github size={24} />
+              </a>
+              <button
+                onClick={onGetStarted}
+                class="px-4 py-2 bg-green-700 text-white rounded-lg font-semibold hover:bg-green-600 transition-colors"
+              >
+                Launch App
+              </button>
+            </div>
           </nav>
         </div>
       </header>
@@ -41,28 +52,10 @@ export function LandingPage({ onGetStarted }) {
               <span class="text-primary block">Performance Score</span>
             </h1>
 
-            <p class="text-xl text-[var(--color-text-muted)] mb-10 max-w-2xl mx-auto">
+            <p class="text-xl text-[var(--color-text-muted)] max-w-2xl mx-auto">
               Making the internet fast for everyone. Track performance, accessibility,
               and best practices with instant Lighthouse audits.
             </p>
-
-            <div class="flex flex-col sm:flex-row gap-4 justify-center">
-              <button
-                onClick={onGetStarted}
-                class="inline-flex items-center justify-center gap-2 px-8 py-4 bg-green-700 text-white rounded-xl font-semibold text-lg hover:bg-green-600 transition-all hover:scale-105 shadow-lg shadow-green-700/25"
-              >
-                Start Analyzing
-                <ArrowRight size={20} />
-              </button>
-              <a
-                href="https://github.com/papayaah/perfmon"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="inline-flex items-center justify-center gap-2 px-8 py-4 bg-surface border border-[var(--color-border)] text-[var(--color-text)] rounded-xl font-semibold text-lg hover:border-primary/50 transition-all"
-              >
-                View on GitHub
-              </a>
-            </div>
           </div>
         </div>
       </section>
@@ -226,14 +219,9 @@ export function LandingPage({ onGetStarted }) {
             </div>
 
             <div class="mt-8 pt-8 border-t border-[var(--color-border)]">
-              <div class="flex items-start gap-3">
-                <div class="flex-shrink-0 w-6 h-6 bg-primary/10 rounded-full flex items-center justify-center">
-                  <span class="text-primary text-xs">ℹ</span>
-                </div>
-                <p class="text-sm text-[var(--color-text-muted)]">
-                  <span class="font-semibold text-[var(--color-text)]">Note:</span> Desktop app and online management features are coming soon. For now, run PerfMon locally to analyze your websites.
-                </p>
-              </div>
+              <p class="text-sm text-[var(--color-text-muted)]">
+                <span class="font-semibold text-[var(--color-text)]">Note:</span> Desktop app and online management features are coming soon. For now, run PerfMon locally to analyze your websites.
+              </p>
             </div>
           </div>
         </div>
@@ -249,7 +237,7 @@ export function LandingPage({ onGetStarted }) {
             <span class="font-semibold text-[var(--color-text)]">PerfMon</span>
           </div>
           <p class="text-sm text-[var(--color-text-muted)]">
-            Built with Preact, Tailwind CSS, and Google Lighthouse
+            Built with Preact, Tailwind CSS, and <a href="https://github.com/GoogleChrome/lighthouse" target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">Google Lighthouse</a>
           </p>
         </div>
       </footer>
@@ -286,10 +274,10 @@ function ScoresDemo() {
   return (
     <div ref={sectionRef} class="flex gap-4 justify-center relative">
       {showFireworks && <Fireworks />}
-      <AnimatedScorePreview label="Perf" targetScore={100} hasAnimated={hasAnimated} delay={0} />
-      <AnimatedScorePreview label="A11y" targetScore={100} hasAnimated={hasAnimated} delay={200} />
-      <AnimatedScorePreview label="Best" targetScore={100} hasAnimated={hasAnimated} delay={400} />
-      <AnimatedScorePreview label="SEO" targetScore={100} hasAnimated={hasAnimated} delay={600} />
+      <AnimatedScorePreview label="Perf" targetScore={100} hasAnimated={hasAnimated} />
+      <AnimatedScorePreview label="A11y" targetScore={100} hasAnimated={hasAnimated} />
+      <AnimatedScorePreview label="Best" targetScore={100} hasAnimated={hasAnimated} />
+      <AnimatedScorePreview label="SEO" targetScore={100} hasAnimated={hasAnimated} />
     </div>
   );
 }
@@ -416,36 +404,46 @@ function Fireworks() {
   );
 }
 
-function AnimatedScorePreview({ label, targetScore, hasAnimated, delay }) {
+function AnimatedScorePreview({ label, targetScore, hasAnimated }) {
   const [displayScore, setDisplayScore] = useState(0);
-  const [hasRun, setHasRun] = useState(false);
+  const startValueRef = useRef(0);
 
   useEffect(() => {
-    if (!hasAnimated || hasRun) return;
+    if (!hasAnimated) return;
 
-    setHasRun(true);
-    const timeout = setTimeout(() => {
-      const duration = 1200;
-      const steps = 60;
-      const increment = targetScore / steps;
-      let current = 0;
-      let step = 0;
+    // Random starting value between 0-8
+    const startValue = Math.floor(Math.random() * 9);
+    startValueRef.current = startValue;
+    setDisplayScore(startValue);
 
-      const timer = setInterval(() => {
-        step++;
-        current = Math.min(Math.round(step * increment), targetScore);
-        setDisplayScore(current);
+    const duration = 1200;
+    const intervalMs = 20;
+    const totalSteps = duration / intervalMs;
+    let step = 0;
+    let currentScore = startValue;
 
-        if (current >= targetScore) {
-          clearInterval(timer);
-        }
-      }, duration / steps);
+    const timer = setInterval(() => {
+      step++;
+      const remaining = targetScore - currentScore;
+      const stepsLeft = totalSteps - step;
 
-      return () => clearInterval(timer);
-    }, delay);
+      if (stepsLeft <= 0 || step >= totalSteps) {
+        setDisplayScore(targetScore);
+        clearInterval(timer);
+        return;
+      }
 
-    return () => clearTimeout(timeout);
-  }, [hasAnimated, hasRun, targetScore, delay]);
+      // Random increment that trends toward target
+      const avgNeeded = remaining / stepsLeft;
+      const randomFactor = 0.3 + Math.random() * 1.4; // 0.3 to 1.7 for more variation
+      const increment = Math.max(1, Math.round(avgNeeded * randomFactor));
+
+      currentScore = Math.min(currentScore + increment, targetScore);
+      setDisplayScore(currentScore);
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [hasAnimated, targetScore]);
 
   const color = displayScore === 100 ? 'green' : displayScore >= 90 ? 'yellow' : 'red';
   const colorClasses = {
@@ -455,8 +453,8 @@ function AnimatedScorePreview({ label, targetScore, hasAnimated, delay }) {
   };
 
   return (
-    <div class={`flex flex-col items-center justify-center px-4 py-3 rounded-lg border ${colorClasses[color]} min-w-[4rem] relative z-10 transition-all duration-300`}>
-      <span class="text-2xl font-bold">{displayScore}</span>
+    <div class={`flex flex-col items-center justify-center px-4 py-3 rounded-lg border ${colorClasses[color]} w-[4.5rem] relative z-10`}>
+      <span class="text-2xl font-bold tabular-nums">{displayScore}</span>
       <span class="text-xs uppercase font-bold">{label}</span>
     </div>
   );
