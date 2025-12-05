@@ -6,6 +6,25 @@ import { useLocation } from 'preact-iso';
 
 export function LandingPage() {
   const { route } = useLocation();
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    // Fetch global stats on page load
+    const fetchStats = async () => {
+      try {
+        const apiUrl = import.meta.env.VITE_API_URL || '';
+        const response = await fetch(`${apiUrl}/api/stats`);
+        if (response.ok) {
+          const data = await response.json();
+          setStats(data);
+        }
+      } catch (err) {
+        console.error('Error fetching stats:', err);
+      }
+    };
+    
+    fetchStats();
+  }, []);
   return (
     <div class="min-h-screen bg-background">
       {/* Fixed Header */}
@@ -48,6 +67,13 @@ export function LandingPage() {
             <div class="inline-flex items-center gap-2 px-4 py-2 bg-primary/10 border border-primary/30 rounded-full text-primary text-sm font-medium mb-8">
               <Zap size={16} />
               Powered by Google Lighthouse
+              {stats && stats.totalAnalyses > 0 && (
+                <>
+                  <span class="mx-2 text-primary/30">•</span>
+                  <span class="font-mono font-bold">{stats.totalAnalyses.toLocaleString()}</span>
+                  <span>analyses performed</span>
+                </>
+              )}
             </div>
 
             <h1 class="text-5xl md:text-6xl font-bold text-[var(--color-text)] mb-6 leading-tight">

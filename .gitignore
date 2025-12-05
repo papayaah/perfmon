@@ -7,6 +7,9 @@ lighthouse.json
 .claude
 .env.local
 
+# Persistent stats (keep locally, don't commit)
+server/stats.json
+
 # Tauri
 src-tauri/target/
 src-tauri/Cargo.lock

@@ -136,10 +136,30 @@ export function App() {
     }
     return 'http://localhost:3001';
   });
+  const [globalQueueStats, setGlobalQueueStats] = useState(null);
 
   useEffect(() => {
     loadHistory();
-  }, []);
+    fetchGlobalQueueStats();
+    
+    // Poll global queue stats every 5 seconds
+    const interval = setInterval(fetchGlobalQueueStats, 5000);
+    return () => clearInterval(interval);
+  }, [apiEndpoint, customApiUrl]);
+
+  const fetchGlobalQueueStats = async () => {
+    try {
+      const apiUrl = apiEndpoint === 'local' ? customApiUrl : (import.meta.env.VITE_API_URL || '');
+      const response = await fetch(`${apiUrl}/api/queue-stats`);
+      
+      if (response.ok) {
+        const stats = await response.json();
+        setGlobalQueueStats(stats);
+      }
+    } catch (err) {
+      console.error('Error fetching global queue stats:', err);
+    }
+  };
 
   // Update current time every second when there are running analyses
   useEffect(() => {
@@ -192,20 +212,100 @@ export function App() {
       // Add to running state
       setRunning(prev => new Map(prev).set(runningKey, { startTime: Date.now(), deviceType: dev }));
 
+      // Start polling queue stats
+      const apiUrl = apiEndpoint === 'local' ? customApiUrl : (import.meta.env.VITE_API_URL || '');
+      const pollIntervalId = startQueueStatsPolling(runningKey, apiUrl);
+
       try {
-        const apiUrl = apiEndpoint === 'local' ? customApiUrl : (import.meta.env.VITE_API_URL || '');
         const response = await fetch(`${apiUrl}/api/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: targetUrl, deviceType: dev }),
         });
 
+        // Handle 429 (queue full) - retry with exponential backoff
+        if (response.status === 429) {
+          const errorData = await response.json().catch(() => ({}));
+          
+          // Update state to show queue is full
+          setRunning(prev => {
+            const newMap = new Map(prev);
+            const existing = newMap.get(runningKey) || {};
+            newMap.set(runningKey, { 
+              ...existing, 
+              queueFull: true,
+              error: errorData.message || 'Queue is full, retrying...',
+              queueStats: errorData.queueStats
+            });
+            return newMap;
+          });
+
+          // Retry after a delay (exponential backoff: 2s, 4s, 8s)
+          let retryDelay = 2000;
+          let retryCount = 0;
+          const maxRetries = 3;
+
+          while (retryCount < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+            
+            // Update retry status
+            setRunning(prev => {
+              const newMap = new Map(prev);
+              const existing = newMap.get(runningKey) || {};
+              newMap.set(runningKey, { 
+                ...existing, 
+                error: `Retrying... (attempt ${retryCount + 1}/${maxRetries})`
+              });
+              return newMap;
+            });
+
+            const retryResponse = await fetch(`${apiUrl}/api/analyze`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url: targetUrl, deviceType: dev }),
+            });
+
+            if (retryResponse.status !== 429) {
+              // Success or different error - process normally
+              if (!retryResponse.ok) {
+                const errorData = await retryResponse.json().catch(() => ({}));
+                throw new Error(errorData.error || 'Analysis failed');
+              }
+
+              const data = await retryResponse.json();
+              console.log('Received data from server:', {
+                url: data.url,
+                hasAudits: !!data.audits,
+                auditCounts: data.audits ? {
+                  performance: data.audits.performance?.length || 0,
+                  accessibility: data.audits.accessibility?.length || 0,
+                  bestPractices: data.audits.bestPractices?.length || 0,
+                  seo: data.audits.seo?.length || 0,
+                } : null
+              });
+              await addReport(data);
+              await loadHistory();
+              clearInterval(pollIntervalId);
+              return; // Success, exit the function
+            }
+
+            retryCount++;
+            retryDelay *= 2; // Exponential backoff
+          }
+
+          // Max retries reached
+          clearInterval(pollIntervalId);
+          throw new Error('Queue is full. Please try again later.');
+        }
+
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
+          clearInterval(pollIntervalId);
           throw new Error(errorData.error || 'Analysis failed');
         }
 
         const data = await response.json();
+        
         console.log('Received data from server:', {
           url: data.url,
           hasAudits: !!data.audits,
@@ -218,7 +318,9 @@ export function App() {
         });
         await addReport(data);
         await loadHistory();
+        clearInterval(pollIntervalId);
       } catch (err) {
+        clearInterval(pollIntervalId);
         // Store error in running state
         setRunning(prev => {
           const newMap = new Map(prev);
@@ -237,6 +339,44 @@ export function App() {
         }, 500);
       }
     }
+  };
+
+  const startQueueStatsPolling = (runningKey, apiUrl) => {
+    const pollInterval = setInterval(async () => {
+      try {
+        // Check if request is still running
+        const currentRunning = running.get(runningKey);
+        if (!currentRunning) {
+          clearInterval(pollInterval);
+          return;
+        }
+
+        const response = await fetch(`${apiUrl}/api/queue-stats`);
+        
+        if (!response.ok) {
+          return;
+        }
+
+        const stats = await response.json();
+        
+        // Update running state with general queue stats
+        setRunning(prev => {
+          const newMap = new Map(prev);
+          const existing = newMap.get(runningKey);
+          if (existing) {
+            newMap.set(runningKey, {
+              ...existing,
+              queueStats: stats
+            });
+          }
+          return newMap;
+        });
+      } catch (err) {
+        console.error('Error polling queue stats:', err);
+      }
+    }, 3000); // Poll every 3 seconds
+
+    return pollInterval;
   };
 
   const handleSubmit = async (e) => {
@@ -364,8 +504,69 @@ export function App() {
             PerfMon
           </h1>
           <p class="text-[var(--color-text-muted)]">Lighthouse Performance Analytics & History</p>
+          {globalQueueStats && globalQueueStats.totalAnalyses > 0 && (
+            <p class="text-xs text-[var(--color-text-muted)] mt-2">
+              <span class="font-mono font-semibold text-primary">{globalQueueStats.totalAnalyses.toLocaleString()}</span> analyses performed
+            </p>
+          )}
         </div>
       </header>
+
+      {/* Global Queue Status Banner */}
+      {globalQueueStats && (
+        <div class="mb-6 max-w-2xl mx-auto">
+          {globalQueueStats.activeCount >= globalQueueStats.maxConcurrent && globalQueueStats.queueLength > 0 ? (
+            <div class="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4">
+              <div class="flex items-center gap-3">
+                <AlertCircle size={20} class="text-yellow-400 flex-shrink-0" />
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-yellow-400">Queue is busy</p>
+                  <p class="text-xs text-[var(--color-text-muted)] mt-1">
+                    {globalQueueStats.activeCount} analysis running, {globalQueueStats.queueLength} waiting in queue
+                    {globalQueueStats.queueLength > 0 && (
+                      <span> • Estimated wait: ~{Math.ceil((globalQueueStats.queueLength * 30000) / 1000)}s</span>
+                    )}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : globalQueueStats.activeCount > 0 ? (
+            <div class="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4">
+              <div class="flex items-center gap-3">
+                <Activity size={20} class="text-blue-400 flex-shrink-0 animate-pulse" />
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-blue-400">System is processing</p>
+                  <p class="text-xs text-[var(--color-text-muted)] mt-1">
+                    {globalQueueStats.activeCount} analysis running • Queue is available
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div class="bg-green-500/10 border border-green-500/30 rounded-xl p-4">
+              <div class="flex items-center gap-3">
+                <Check size={20} class="text-green-400 flex-shrink-0" />
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-green-400">Ready to analyze</p>
+                  <p class="text-xs text-[var(--color-text-muted)] mt-1">
+                    No queue • Your analysis will start immediately
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Total Analyses Counter */}
+          {globalQueueStats.totalAnalyses !== undefined && (
+            <div class="mt-3 text-center">
+              <p class="text-sm text-[var(--color-text-muted)]">
+                <span class="font-mono font-bold text-lg text-primary">{globalQueueStats.totalAnalyses.toLocaleString()}</span>
+                <span class="ml-2">total analyses performed</span>
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       <section class="mb-12" aria-labelledby="analyze-heading">
         <h2 id="analyze-heading" class="sr-only">Analyze URL</h2>
@@ -432,35 +633,74 @@ export function App() {
         <section class="mb-12" aria-labelledby="running-heading">
           <h2 id="running-heading" class="text-2xl font-bold text-[var(--color-text)] mb-6 flex items-center gap-2">
             <Activity size={24} class="animate-pulse" />
-            Running ({running.size})
+            Active Requests ({running.size})
           </h2>
           <div class="space-y-3">
-            {Array.from(running.entries()).map(([runningKey, state]) => {
+            {Array.from(running.entries()).map(([runningKey, state], index) => {
               const [runningUrl, devType] = runningKey.split('|');
+              const hasQueueStats = state.queueStats;
+              
+              // Determine if this request is likely processing or queued
+              // First request is processing, rest are queued if we're at capacity
+              const isLikelyProcessing = hasQueueStats 
+                ? state.queueStats.activeCount < state.queueStats.maxConcurrent || index === 0
+                : index === 0;
+              
+              const isQueued = hasQueueStats && state.queueStats.activeCount >= state.queueStats.maxConcurrent && index > 0;
+              
               return (
-                <div key={runningKey} class="bg-surface/80 p-4 rounded-xl border border-[var(--color-border)] flex items-center justify-between">
+                <div 
+                  key={runningKey} 
+                  class={`p-4 rounded-xl border flex items-center justify-between ${
+                    isQueued 
+                      ? 'bg-yellow-500/5 border-yellow-500/30' 
+                      : 'bg-surface/80 border-[var(--color-border)]'
+                  }`}
+                >
                   <div class="flex-1 min-w-0">
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 flex-wrap">
                       <p class="font-medium text-[var(--color-text)] truncate font-mono text-sm" title={runningUrl}>
                         {runningUrl}
                       </p>
                       <span class="px-2 py-0.5 text-xs font-medium bg-primary/20 text-primary rounded">
                         {devType}
                       </span>
+                      {isQueued ? (
+                        <span class="px-2 py-0.5 text-xs font-bold bg-yellow-500/20 text-yellow-400 rounded border border-yellow-500/30">
+                          ⏳ QUEUED
+                        </span>
+                      ) : isLikelyProcessing ? (
+                        <span class="px-2 py-0.5 text-xs font-bold bg-blue-500/20 text-blue-400 rounded border border-blue-500/30">
+                          ⚡ PROCESSING
+                        </span>
+                      ) : null}
                     </div>
                     {state.error ? (
                       <div class="mt-2 text-red-400 text-sm flex items-center gap-2">
                         <AlertCircle size={16} />
                         {state.error}
                       </div>
+                    ) : isQueued ? (
+                      <div class="mt-2">
+                        <p class="text-xs text-yellow-400 font-medium">
+                          Waiting in queue... ({Math.floor((now - state.startTime) / 1000)}s elapsed)
+                        </p>
+                        {hasQueueStats && (
+                          <p class="text-xs text-[var(--color-text-muted)] mt-1">
+                            {state.queueStats.queueLength} request(s) ahead • Est. wait: ~{Math.ceil((state.queueStats.queueLength * 30000) / 1000)}s
+                          </p>
+                        )}
+                      </div>
                     ) : (
-                      <p class="text-xs text-[var(--color-text-muted)] mt-1">
-                        Running for {Math.floor((now - state.startTime) / 1000)}s
+                      <p class="text-xs text-blue-400 font-medium mt-1">
+                        Analyzing... ({Math.floor((now - state.startTime) / 1000)}s)
                       </p>
                     )}
                   </div>
                   {!state.error && (
-                    <div class="ml-4 w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                    <div class={`ml-4 w-5 h-5 border-2 border-t-transparent rounded-full ${
+                      isQueued ? 'border-yellow-400 animate-spin-slow' : 'border-primary animate-spin'
+                    }`} />
                   )}
                 </div>
               );

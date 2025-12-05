@@ -127,6 +127,19 @@ This specification defines the requirements for deploying PerfMon to DigitalOcea
 
 ### Requirement 10
 
+**User Story:** As a system operator, I want the backend to queue concurrent analysis requests, so that the system handles multiple simultaneous requests without timing out or crashing.
+
+#### Acceptance Criteria
+
+1. WHEN multiple analysis requests arrive simultaneously THEN the system SHALL queue requests beyond the concurrency limit
+2. WHEN a Chrome instance becomes available THEN the system SHALL process the next queued request
+3. WHEN the queue reaches maximum capacity THEN the system SHALL reject new requests with a 429 status code
+4. WHEN a request is queued THEN the system SHALL respond with the analysis results once processing completes
+5. WHEN a queued request times out THEN the system SHALL remove it from the queue and return a 408 status code
+6. WHEN the system starts THEN the system SHALL read MAX_CONCURRENT_ANALYSES and MAX_QUEUE_SIZE from environment variables
+
+### Requirement 11
+
 **User Story:** As a developer, I want to create deployment documentation, so that other developers can deploy and maintain the application.
 
 #### Acceptance Criteria

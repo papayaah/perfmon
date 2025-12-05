@@ -177,11 +177,98 @@ static_sites:
       - path: /
 ```
 
+### Request Queue Manager
+
+**New file: `server/queue.js`**:
+
+```javascript
+class RequestQueue {
+  constructor(maxConcurrent = 1, maxQueueSize = 10) {
+    this.maxConcurrent = maxConcurrent;
+    this.maxQueueSize = maxQueueSize;
+    this.activeCount = 0;
+    this.queue = [];
+  }
+
+  async add(task, timeoutMs = 120000) {
+    // Check if queue is full
+    if (this.queue.length >= this.maxQueueSize) {
+      throw new Error('Queue is full');
+    }
+
+    // If under concurrency limit, execute immediately
+    if (this.activeCount < this.maxConcurrent) {
+      return this.execute(task);
+    }
+
+    // Otherwise, queue the task
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        // Remove from queue on timeout
+        const index = this.queue.findIndex(item => item.timeoutId === timeoutId);
+        if (index !== -1) {
+          this.queue.splice(index, 1);
+        }
+        reject(new Error('Request timeout'));
+      }, timeoutMs);
+
+      this.queue.push({ task, resolve, reject, timeoutId });
+    });
+  }
+
+  async execute(task) {
+    this.activeCount++;
+    try {
+      const result = await task();
+      return result;
+    } finally {
+      this.activeCount--;
+      this.processNext();
+    }
+  }
+
+  processNext() {
+    if (this.queue.length === 0 || this.activeCount >= this.maxConcurrent) {
+      return;
+    }
+
+    const { task, resolve, reject, timeoutId } = this.queue.shift();
+    clearTimeout(timeoutId);
+
+    this.execute(task)
+      .then(resolve)
+      .catch(reject);
+  }
+
+  getStats() {
+    return {
+      activeCount: this.activeCount,
+      queueLength: this.queue.length,
+      maxConcurrent: this.maxConcurrent,
+      maxQueueSize: this.maxQueueSize
+    };
+  }
+}
+
+module.exports = { RequestQueue };
+```
+
 ### Modified Backend Server
 
 **server/index.js** changes:
 
-1. **Port Configuration**:
+1. **Queue Initialization**:
+```javascript
+const { RequestQueue } = require('./queue');
+
+const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT_ANALYSES) || 1;
+const MAX_QUEUE_SIZE = parseInt(process.env.MAX_QUEUE_SIZE) || 10;
+const QUEUE_TIMEOUT = parseInt(process.env.QUEUE_TIMEOUT_MS) || 120000;
+
+const requestQueue = new RequestQueue(MAX_CONCURRENT, MAX_QUEUE_SIZE);
+```
+
+2. **Port Configuration**:
 ```javascript
 // Use PORT from environment (DigitalOcean assigns this)
 const PORT = process.env.PORT || 3001;
@@ -366,6 +453,18 @@ interface StaticSite {
 *For any* OPTIONS preflight request to the API, the system should respond with appropriate CORS headers including allowed methods and origins
 **Validates: Requirements 8.2**
 
+### Property 11: Request queuing under load
+*For any* number of concurrent requests exceeding MAX_CONCURRENT_ANALYSES, requests beyond the limit should be queued and processed in order when capacity becomes available
+**Validates: Requirements 10.1, 10.2**
+
+### Property 12: Queue capacity enforcement
+*For any* incoming request when the queue is at MAX_QUEUE_SIZE, the system should reject the request with 429 status and not add it to the queue
+**Validates: Requirements 10.3**
+
+### Property 13: Queue timeout handling
+*For any* queued request that exceeds the timeout duration, the system should remove it from the queue and return a 408 status without processing
+**Validates: Requirements 10.5**
+
 ## Error Handling
 
 ### Frontend Error Scenarios
@@ -410,7 +509,13 @@ interface StaticSite {
    - Detect out-of-memory errors
    - Log memory usage before crash
    - Return 503 Service Unavailable
-   - Implement request queuing if needed
+   - Queue requests to prevent resource exhaustion
+
+5. **Queue Overflow**:
+   - Detect when queue is at maximum capacity
+   - Return 429 Too Many Requests
+   - Include Retry-After header with estimated wait time
+   - Log queue overflow events for monitoring
 
 ### Deployment Error Scenarios
 

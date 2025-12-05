@@ -20,6 +20,15 @@ services:
         value: production
       - key: PORT
         value: "8080"
+      - key: MAX_CONCURRENT_ANALYSES
+        value: "1"
+      - key: MAX_QUEUE_SIZE
+        value: "10"
+      - key: QUEUE_TIMEOUT_MS
+        value: "120000"
+      # Note: stats.json will reset on each deploy without persistent storage
+      # For production, consider using DigitalOcean Managed Database (PostgreSQL)
+      # or Redis to persist statistics across deployments
     
     health_check:
       http_path: /health
