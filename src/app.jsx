@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
-import { Activity, Search, History as HistoryIcon, Trash2, AlertCircle, RefreshCw, Smartphone, Monitor, X, Check, ChevronDown, Home, Copy, CheckCheck, Settings } from 'lucide-preact';
+import { Activity, Search, History as HistoryIcon, Trash2, AlertCircle, RefreshCw, Smartphone, Monitor, X, Check, ChevronDown, Home, Copy, CheckCheck, Settings, Linkedin, Twitter, MessageCircle, Code } from 'lucide-preact';
 import { ScoreCard } from './components/ScoreCard';
 import { ThemeToggle } from './components/ThemeToggle';
 import { addReport, getReports, deleteReport } from './db';
@@ -555,16 +555,6 @@ export function App() {
               </div>
             </div>
           )}
-          
-          {/* Total Analyses Counter */}
-          {globalQueueStats.totalAnalyses !== undefined && (
-            <div class="mt-3 text-center">
-              <p class="text-sm text-[var(--color-text-muted)]">
-                <span class="font-mono font-bold text-lg text-primary">{globalQueueStats.totalAnalyses.toLocaleString()}</span>
-                <span class="ml-2">total analyses performed</span>
-              </p>
-            </div>
-          )}
         </div>
       )}
 
@@ -578,7 +568,7 @@ export function App() {
               type="text"
               value={url}
               onInput={(e) => setUrl(e.currentTarget.value)}
-              placeholder="Enter URL (e.g., localhost:3000) - Add multiple to run concurrently"
+              placeholder="Enter URL (e.g., example.com or https://yoursite.com)"
               class="w-full bg-surface text-[var(--color-text)] px-6 py-4 pr-14 rounded-2xl border border-[var(--color-border)] focus:border-primary focus:ring-2 focus:ring-primary/50 outline-none transition-all text-lg shadow-lg placeholder:text-[var(--color-text-muted)]"
             />
             <button
@@ -591,7 +581,7 @@ export function App() {
             </button>
           </div>
           
-          <div class="flex gap-2 justify-center mb-4">
+          <div class="flex gap-2 justify-center">
             <DeviceButton
               id="desktop"
               label="Desktop"
@@ -612,18 +602,6 @@ export function App() {
               icon={Activity}
               isActive={deviceType === 'both'}
               onClick={() => setDeviceType('both')}
-            />
-          </div>
-
-          <div class="flex flex-wrap gap-2 justify-center items-center">
-            <span class="text-xs text-[var(--color-text-muted)]">Quick:</span>
-            <QuickPortButton port="5173" onRun={(url) => runAnalysis(normalizeUrl(url))} />
-            <QuickPortButton port="4173" onRun={(url) => runAnalysis(normalizeUrl(url))} />
-            <QuickPortButton port="3000" onRun={(url) => runAnalysis(normalizeUrl(url))} />
-            <QuickPortButton port="8080" onRun={(url) => runAnalysis(normalizeUrl(url))} />
-            <QuickPortDropdown
-              ports={['5174', '5175', '3001', '3002', '8000']}
-              onRun={(url) => runAnalysis(normalizeUrl(url))}
             />
           </div>
         </form>
@@ -914,6 +892,57 @@ export function App() {
           </div>
         )}
       </section>
+
+      {/* Footer */}
+      <footer class="mt-16 pt-8 border-t border-[var(--color-border)]">
+        <div class="text-center">
+          <p class="text-sm text-[var(--color-text-muted)] mb-4">
+            If this tool saved you some time, consider following me for more projects
+          </p>
+          <div class="flex justify-center gap-4 flex-wrap">
+            <a
+              href="https://www.linkedin.com/in/david-ang-0932bb4a/"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--color-border)] bg-surface text-[var(--color-text-muted)] hover:border-primary hover:text-primary hover:bg-primary/10 transition-all"
+              title="Follow on LinkedIn"
+            >
+              <Linkedin size={18} />
+              <span class="text-sm">LinkedIn</span>
+            </a>
+            <a
+              href="https://x.com/papayaahtries"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--color-border)] bg-surface text-[var(--color-text-muted)] hover:border-primary hover:text-primary hover:bg-primary/10 transition-all"
+              title="Follow on X"
+            >
+              <Twitter size={18} />
+              <span class="text-sm">X</span>
+            </a>
+            <a
+              href="https://www.reddit.com/user/Prize-Coyote-6989/"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--color-border)] bg-surface text-[var(--color-text-muted)] hover:border-primary hover:text-primary hover:bg-primary/10 transition-all"
+              title="Follow on Reddit"
+            >
+              <MessageCircle size={18} />
+              <span class="text-sm">Reddit</span>
+            </a>
+            <a
+              href="https://devpost.com/software/perfmon"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--color-border)] bg-surface text-[var(--color-text-muted)] hover:border-primary hover:text-primary hover:bg-primary/10 transition-all"
+              title="Check out on Devpost"
+            >
+              <Code size={18} />
+              <span class="text-sm">Devpost</span>
+            </a>
+          </div>
+        </div>
+      </footer>
     </main>
   );
 }

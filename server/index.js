@@ -112,7 +112,39 @@ app.post('/api/analyze', async (req, res) => {
       try {
         console.log(`Starting ${deviceType} analysis for: ${url}`);
         
-        chrome = await chromeLauncher.launch({ chromeFlags: ['--headless', '--no-sandbox', '--disable-gpu'] });
+        // Use different Chrome flags based on environment
+        const isProduction = process.env.NODE_ENV === 'production';
+        const chromeFlags = [
+          '--headless',
+          '--no-sandbox',
+          '--disable-gpu',
+          '--disable-dev-shm-usage',
+          '--disable-setuid-sandbox',
+          '--no-first-run',
+          '--disable-extensions',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--mute-audio'
+        ];
+        
+        // Add aggressive flags only in production (DigitalOcean)
+        if (isProduction) {
+          chromeFlags.push(
+            '--single-process',
+            '--no-zygote',
+            '--disable-software-rasterizer',
+            '--disable-background-networking',
+            '--metrics-recording-only',
+            '--no-default-browser-check',
+            '--safebrowsing-disable-auto-update',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--disable-ipc-flooding-protection'
+          );
+        }
+        
+        chrome = await chromeLauncher.launch({ chromeFlags });
         
         // Use the appropriate config based on device type
         // For desktop, we use the desktop preset
@@ -147,7 +179,14 @@ app.post('/api/analyze', async (req, res) => {
           port: chrome.port,
         };
         
-        const runnerResult = await lighthouse(url, options, config);
+        // Add hard timeout wrapper to prevent hanging
+        const lighthouseTimeout = 90000; // 90 seconds max for Lighthouse itself
+        const runnerResult = await Promise.race([
+          lighthouse(url, options, config),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Lighthouse execution timeout')), lighthouseTimeout)
+          )
+        ]);
         const report = JSON.parse(runnerResult.report);
 
         const scores = {
@@ -280,7 +319,18 @@ app.post('/api/analyze', async (req, res) => {
         throw error;
       } finally {
         if (chrome) {
-          await chrome.kill();
+          try {
+            await chrome.kill();
+            console.log('Chrome process killed successfully');
+          } catch (killError) {
+            console.error('Error killing Chrome:', killError);
+            // Force kill if graceful shutdown fails
+            try {
+              process.kill(chrome.pid, 'SIGKILL');
+            } catch (forceKillError) {
+              console.error('Error force killing Chrome:', forceKillError);
+            }
+          }
         }
       }
     }, QUEUE_TIMEOUT_MS);
@@ -319,6 +369,17 @@ app.post('/api/analyze', async (req, res) => {
       details: error.message 
     });
   }
+});
+
+// Add global error handlers to prevent crashes
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Don't exit - keep server running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit - keep server running
 });
 
 // Start server with auto port detection

@@ -26,6 +26,8 @@ services:
         value: "10"
       - key: QUEUE_TIMEOUT_MS
         value: "120000"
+      - key: CHROME_PATH
+        value: "/usr/bin/chromium"
       # Note: stats.json will reset on each deploy without persistent storage
       # For production, consider using DigitalOcean Managed Database (PostgreSQL)
       # or Redis to persist statistics across deployments
