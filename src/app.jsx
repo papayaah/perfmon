@@ -636,17 +636,42 @@ export function App() {
             Active Requests ({running.size})
           </h2>
           <div class="space-y-3">
-            {Array.from(running.entries()).map(([runningKey, state], index) => {
+            {Array.from(running.entries())
+              .sort(([, a], [, b]) => a.startTime - b.startTime) // Sort by start time (oldest first)
+              .map(([runningKey, state], index) => {
               const [runningUrl, devType] = runningKey.split('|');
               const hasQueueStats = state.queueStats;
-              
-              // Determine if this request is likely processing or queued
-              // First request is processing, rest are queued if we're at capacity
-              const isLikelyProcessing = hasQueueStats 
-                ? state.queueStats.activeCount < state.queueStats.maxConcurrent || index === 0
-                : index === 0;
-              
-              const isQueued = hasQueueStats && state.queueStats.activeCount >= state.queueStats.maxConcurrent && index > 0;
+
+              // Determine status based on global queue stats
+              // activeCount = number currently being processed server-side
+              // queueLength = number waiting in server queue
+              // maxConcurrent = max parallel analyses the server supports
+              const maxConcurrent = hasQueueStats ? state.queueStats.maxConcurrent : 1;
+              const activeCount = hasQueueStats ? state.queueStats.activeCount : 0;
+              const queueLength = hasQueueStats ? state.queueStats.queueLength : 0;
+
+              // Logic: Server can process up to maxConcurrent at once
+              // If we have N local requests sorted by start time:
+              // - At most `activeCount` of them can be processing (the oldest ones)
+              // - The rest must be queued if queueLength > 0
+              // Since requests are sorted by startTime (oldest first), use index to determine status
+              //
+              // isLikelyProcessing: true if this request is likely one of the active ones
+              // isQueued: true if this request is waiting in queue
+              let isLikelyProcessing = false;
+              let isQueued = false;
+
+              if (!hasQueueStats) {
+                // No stats yet - assume first request is processing, rest are queued
+                isLikelyProcessing = index === 0;
+                isQueued = index > 0;
+              } else {
+                // We have stats - use them to determine status
+                // Processing if we're within the active count
+                isLikelyProcessing = index < activeCount;
+                // Queued if there's a queue and we're beyond active slots
+                isQueued = queueLength > 0 && index >= activeCount;
+              }
               
               return (
                 <div 
@@ -667,11 +692,11 @@ export function App() {
                       </span>
                       {isQueued ? (
                         <span class="px-2 py-0.5 text-xs font-bold bg-yellow-500/20 text-yellow-400 rounded border border-yellow-500/30">
-                          ⏳ QUEUED
+                          QUEUED
                         </span>
                       ) : isLikelyProcessing ? (
                         <span class="px-2 py-0.5 text-xs font-bold bg-blue-500/20 text-blue-400 rounded border border-blue-500/30">
-                          ⚡ PROCESSING
+                          PROCESSING
                         </span>
                       ) : null}
                     </div>
@@ -697,10 +722,11 @@ export function App() {
                       </p>
                     )}
                   </div>
-                  {!state.error && (
-                    <div class={`ml-4 w-5 h-5 border-2 border-t-transparent rounded-full ${
-                      isQueued ? 'border-yellow-400 animate-spin-slow' : 'border-primary animate-spin'
-                    }`} />
+                  {!state.error && !isQueued && (
+                    <div class="ml-4 w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  )}
+                  {isQueued && (
+                    <div class="ml-4 text-yellow-400 text-2xl">⋯</div>
                   )}
                 </div>
               );
