@@ -23,6 +23,7 @@ const serverPort = getServerPort();
 export default defineConfig({
   plugins: [preact()],
   server: {
+    allowedHosts: true,
     proxy: {
       '/api': `http://localhost:${serverPort}`
     }

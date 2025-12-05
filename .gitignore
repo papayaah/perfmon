@@ -5,6 +5,7 @@ dist
 lighthouse.json
 .server-port
 .claude
+.env.local
 
 # Tauri
 src-tauri/target/

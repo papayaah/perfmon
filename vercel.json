@@ -4,6 +4,10 @@
   "devCommand": "vite --port $PORT",
   "installCommand": "npm install",
   "framework": "vite",
+  "rewrites": [
+    { "source": "/app", "destination": "/index.html" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
   "functions": {
     "api/analyze.js": {
       "maxDuration": 300,

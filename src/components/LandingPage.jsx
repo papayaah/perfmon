@@ -2,7 +2,10 @@ import { Activity, Zap, History, Smartphone, BarChart3, Shield, Clock, Github } 
 import { useEffect, useState, useRef } from 'preact/hooks';
 import { Fireworks as FireworksJS } from 'fireworks-js';
 
-export function LandingPage({ onGetStarted }) {
+import { useLocation } from 'preact-iso';
+
+export function LandingPage() {
+  const { route } = useLocation();
   return (
     <div class="min-h-screen bg-background">
       {/* Fixed Header */}
@@ -23,12 +26,12 @@ export function LandingPage({ onGetStarted }) {
               >
                 <Github size={24} />
               </a>
-              <button
-                onClick={onGetStarted}
+              <a
+                href="/app"
                 class="px-4 py-2 bg-green-700 text-white rounded-lg font-semibold hover:bg-green-600 transition-colors"
               >
                 Launch App
-              </button>
+              </a>
             </div>
           </nav>
         </div>
