@@ -37,6 +37,11 @@ function writePortFile(port) {
 app.use(cors());
 app.use(express.json());
 
+// Health check endpoint for DigitalOcean
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 app.post('/api/analyze', async (req, res) => {
   const { url, deviceType = 'desktop' } = req.body;
 
@@ -228,10 +233,16 @@ app.post('/api/analyze', async (req, res) => {
 // Start server with auto port detection
 (async () => {
   try {
-    const port = await findAvailablePort(3001);
-    writePortFile(port);
-    app.listen(port, () => {
-      console.log(`Lighthouse runner listening at http://localhost:${port}`);
+    // Use PORT env var for production (DigitalOcean), fallback to auto-detect for local dev
+    const port = process.env.PORT || await findAvailablePort(3001);
+    
+    // Only write port file in development
+    if (!process.env.PORT) {
+      writePortFile(port);
+    }
+    
+    app.listen(port, '0.0.0.0', () => {
+      console.log(`Lighthouse runner listening at http://0.0.0.0:${port}`);
     });
   } catch (error) {
     console.error('Failed to start server:', error.message);

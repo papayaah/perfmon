@@ -1,0 +1,28 @@
+name: perfmon-lighthouse-api
+region: nyc
+
+services:
+  - name: lighthouse-api
+    github:
+      repo: papayaah/perfmon
+      branch: master
+      deploy_on_push: false
+    dockerfile_path: Dockerfile
+    source_dir: /
+    
+    instance_count: 1
+    instance_size_slug: basic-xs
+    
+    http_port: 8080
+    
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "8080"
+    
+    health_check:
+      http_path: /health
+    
+    routes:
+      - path: /api

@@ -1,0 +1,10 @@
+node_modules
+dist
+.DS_Store
+*.log
+.server-port
+.claude
+.vite
+.vercel
+.vscode
+src-tauri
