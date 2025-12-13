@@ -17,3 +17,4 @@ src-tauri/Cargo.lock
 .vite
 .vercel
 .vscode
+web

@@ -113,6 +113,79 @@ function QuickPortDropdown({ ports, onRun }) {
   );
 }
 
+function RetryDropdown({ reportId, currentDeviceType, onRetry, isRunning, disabled }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const alternateDeviceType = currentDeviceType === 'desktop' ? 'mobile' : 'desktop';
+
+  const handleRefreshClick = (e) => {
+    e.stopPropagation();
+    if (!disabled) {
+      onRetry(currentDeviceType);
+    }
+  };
+
+  const handleChevronClick = (e) => {
+    e.stopPropagation();
+    if (!disabled) {
+      setIsOpen(!isOpen);
+    }
+  };
+
+  return (
+    <div class="relative flex items-center">
+      <button
+        type="button"
+        onClick={handleRefreshClick}
+        disabled={disabled}
+        class="p-2 text-[var(--color-text-muted)] hover:text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        aria-label="Retry analysis"
+        title="Retry analysis with same device type"
+      >
+        <RefreshCw size={18} class={isRunning ? 'animate-spin' : ''} />
+      </button>
+      <button
+        type="button"
+        onClick={handleChevronClick}
+        disabled={disabled}
+        class="p-1 text-[var(--color-text-muted)] hover:text-primary hover:bg-primary/10 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        aria-label="Retry options"
+        title="Choose device type for retry"
+      >
+        <ChevronDown size={12} class={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+      {isOpen && !disabled && (
+        <>
+          <div class="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
+          <div class="absolute top-full right-0 mt-1 z-50 bg-surface border border-[var(--color-border)] rounded-lg shadow-lg p-1 min-w-[160px]">
+            <button
+              type="button"
+              onClick={() => {
+                onRetry(currentDeviceType);
+                setIsOpen(false);
+              }}
+              class="w-full px-3 py-2 text-sm font-medium rounded text-[var(--color-text-muted)] hover:text-primary hover:bg-primary/10 transition-all text-left flex items-center gap-2"
+            >
+              {currentDeviceType === 'desktop' ? <Monitor size={16} /> : <Smartphone size={16} />}
+              <span>Retry ({currentDeviceType === 'desktop' ? 'Desktop' : 'Mobile'})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onRetry(alternateDeviceType);
+                setIsOpen(false);
+              }}
+              class="w-full px-3 py-2 text-sm font-medium rounded text-[var(--color-text-muted)] hover:text-primary hover:bg-primary/10 transition-all text-left flex items-center gap-2"
+            >
+              {alternateDeviceType === 'desktop' ? <Monitor size={16} /> : <Smartphone size={16} />}
+              <span>Retry ({alternateDeviceType === 'desktop' ? 'Desktop' : 'Mobile'})</span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function App() {
   const [theme, setTheme] = useTheme();
   const [url, setUrl] = useState('');
@@ -831,15 +904,13 @@ export function App() {
 
                     {/* Action buttons */}
                     <div class="flex items-center gap-1 flex-shrink-0">
-                      <button
-                        onClick={() => handleRefresh(report.url, reportDeviceType)}
+                      <RetryDropdown
+                        reportId={report.id}
+                        currentDeviceType={reportDeviceType}
+                        onRetry={(deviceType) => handleRefresh(report.url, deviceType)}
+                        isRunning={isRunning}
                         disabled={isRunning || deletingId === report.id}
-                        class="p-2 text-[var(--color-text-muted)] hover:text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        aria-label="Refresh analysis"
-                        title="Run new analysis for this URL"
-                      >
-                        <RefreshCw size={18} class={isRunning ? 'animate-spin' : ''} />
-                      </button>
+                      />
                       {deletingId === report.id ? (
                         <div class="flex items-center gap-1 bg-red-500/20 border border-red-500/50 rounded-lg p-1">
                           <button
@@ -989,6 +1060,8 @@ function AuditDetails({ category, audits }) {
   }
 
   const [copiedId, setCopiedId] = useState(null);
+  const [copiedSummary, setCopiedSummary] = useState(false);
+  const [copiedGroupSummary, setCopiedGroupSummary] = useState(null); // Track which group was copied
 
   const copyAuditToClipboard = async (audit) => {
     const text = JSON.stringify(audit, null, 2);
@@ -1001,21 +1074,225 @@ function AuditDetails({ category, audits }) {
     }
   };
 
+  const copyFailedAuditsSummary = async () => {
+    // Filter audits with score 0 or null (failed audits)
+    const failedAudits = audits.filter(audit => audit.score === null || audit.score === 0);
+    
+    if (failedAudits.length === 0) return;
+
+    // Create a formatted summary
+    const summary = failedAudits.map((audit, index) => {
+      let text = `${index + 1}. ${audit.title}\n`;
+      
+      // Include score if available
+      if (audit.score !== null) {
+        text += `   Score: ${Math.round(audit.score)}\n`;
+      } else {
+        text += `   Score: Failed (critical issue)\n`;
+      }
+      
+      if (audit.description) {
+        // Strip HTML tags from description
+        const description = audit.description.replace(/<[^>]*>/g, '').trim();
+        text += `   ${description}\n`;
+      }
+      
+      if (audit.displayValue) {
+        text += `   Value: ${audit.displayValue}\n`;
+      }
+      
+      if (audit.warnings && audit.warnings.length > 0) {
+        text += `   Warnings: ${audit.warnings.join('; ')}\n`;
+      }
+      
+      return text;
+    }).join('\n');
+
+    const fullSummary = `${category} - Failed Audits Summary (${failedAudits.length} issues)\n${'='.repeat(50)}\n\n${summary}`;
+
+    try {
+      await navigator.clipboard.writeText(fullSummary);
+      setCopiedSummary(true);
+      setTimeout(() => setCopiedSummary(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy summary:', err);
+    }
+  };
+
+  const copyGroupSummary = async (group, groupName) => {
+    const groupAudits = groupedAudits[group] || [];
+    
+    if (groupAudits.length === 0) return;
+
+    // Create a formatted summary for this group (all audits, not just failed ones)
+    const summary = groupAudits.map((audit, index) => {
+      let text = `${index + 1}. ${audit.title}\n`;
+      
+      // Include score if available
+      if (audit.score !== null) {
+        text += `   Score: ${Math.round(audit.score)}\n`;
+      } else {
+        text += `   Score: Failed (critical issue)\n`;
+      }
+      
+      if (audit.description) {
+        // Strip HTML tags from description
+        const description = audit.description.replace(/<[^>]*>/g, '').trim();
+        text += `   ${description}\n`;
+      }
+      
+      if (audit.displayValue) {
+        text += `   Value: ${audit.displayValue}\n`;
+      }
+      
+      if (audit.warnings && audit.warnings.length > 0) {
+        text += `   Warnings: ${audit.warnings.join('; ')}\n`;
+      }
+      
+      return text;
+    }).join('\n');
+
+    const fullSummary = `${category} - ${groupName} Summary (${groupAudits.length} ${groupAudits.length === 1 ? 'issue' : 'issues'})\n${'='.repeat(50)}\n\n${summary}`;
+
+    try {
+      await navigator.clipboard.writeText(fullSummary);
+      setCopiedGroupSummary(group);
+      setTimeout(() => setCopiedGroupSummary(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy group summary:', err);
+    }
+  };
+
+  // Check if there are any failed audits (score 0 or null)
+  const hasFailedAudits = audits.some(audit => audit.score === null || audit.score === 0);
+
+  // Format group names for display
+  const formatGroupName = (group) => {
+    if (!group || group === 'hidden' || group === 'other') return 'Other';
+    // Convert kebab-case to Title Case
+    return group
+      .split('-')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ')
+      .replace(/a11y/gi, 'A11y')
+      .replace(/Seo/gi, 'SEO');
+  };
+
+  // Group audits by their group property
+  const groupedAudits = audits.reduce((acc, audit) => {
+    const group = audit.group || 'other';
+    if (!acc[group]) {
+      acc[group] = [];
+    }
+    acc[group].push(audit);
+    return acc;
+  }, {});
+
+  // Sort groups: metrics first, then diagnostics, then alphabetically
+  const groupOrder = ['metrics', 'diagnostics'];
+  const sortedGroups = Object.keys(groupedAudits).sort((a, b) => {
+    const aIndex = groupOrder.indexOf(a);
+    const bIndex = groupOrder.indexOf(b);
+    if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
+    if (aIndex !== -1) return -1;
+    if (bIndex !== -1) return 1;
+    return a.localeCompare(b);
+  });
+
+  const [expandedGroups, setExpandedGroups] = useState(new Set(sortedGroups)); // All groups expanded by default
+
+  const toggleGroup = (group) => {
+    setExpandedGroups(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(group)) {
+        newSet.delete(group);
+      } else {
+        newSet.add(group);
+      }
+      return newSet;
+    });
+  };
+
   return (
     <div class="mt-2 p-4 bg-surface border border-[var(--color-border)] rounded-lg space-y-3 max-h-96 overflow-y-auto animate-in fade-in slide-in-from-top-2 duration-200">
-      <h4 class="text-sm font-semibold text-[var(--color-text)] mb-3">{category} Issues ({audits.length})</h4>
-      {audits.map((audit) => (
+      <div class="flex items-center justify-between mb-3">
+        <h4 class="text-sm font-semibold text-[var(--color-text)]">{category} Issues ({audits.length})</h4>
+        {hasFailedAudits && (
+          <button
+            onClick={copyFailedAuditsSummary}
+            class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--color-text-muted)] hover:text-primary hover:bg-primary/10 rounded-lg border border-[var(--color-border)] transition-colors"
+            title="Copy summary of all failed audits"
+          >
+            {copiedSummary ? (
+              <>
+                <CheckCheck size={14} class="text-green-500" />
+                <span>Copied!</span>
+              </>
+            ) : (
+              <>
+                <Copy size={14} />
+                <span>Copy Summary</span>
+              </>
+            )}
+          </button>
+        )}
+      </div>
+      {sortedGroups.map((group) => {
+        const groupAudits = groupedAudits[group];
+        const isExpanded = expandedGroups.has(group);
+        const groupName = formatGroupName(group);
+        
+        return (
+          <div key={group} class="border border-[var(--color-border)] rounded-lg overflow-hidden">
+            <div class="w-full px-3 py-2 bg-background hover:bg-surface transition-colors flex items-center justify-between">
+              <button
+                onClick={() => toggleGroup(group)}
+                class="flex-1 flex items-center justify-between text-left"
+              >
+                <span class="text-sm font-semibold text-[var(--color-text)]">
+                  {groupName} ({groupAudits.length})
+                </span>
+                <ChevronDown size={16} class={`text-[var(--color-text-muted)] transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyGroupSummary(group, groupName);
+                }}
+                class="ml-2 flex items-center gap-1 px-2 py-1 text-xs font-medium text-[var(--color-text-muted)] hover:text-primary hover:bg-primary/10 rounded border border-[var(--color-border)] transition-colors"
+                title={`Copy summary of all audits in ${groupName}`}
+              >
+                {copiedGroupSummary === group ? (
+                  <>
+                    <CheckCheck size={12} class="text-green-500" />
+                    <span>Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={12} />
+                    <span>Copy</span>
+                  </>
+                )}
+              </button>
+            </div>
+            {isExpanded && (
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3 p-3">
+                {groupAudits.map((audit) => (
         <div key={audit.id} class="p-3 bg-background rounded border border-[var(--color-border)] relative group">
           <div class="flex items-start justify-between gap-2 mb-2">
             <h5 class="text-sm font-medium text-[var(--color-text)] flex-1">{audit.title}</h5>
             <div class="flex items-center gap-1">
-              {audit.score !== null && (
+              {audit.score !== null && audit.score > 0 ? (
                 <span class={`text-xs font-bold px-2 py-0.5 rounded ${
                   audit.score >= 90 ? 'bg-green-500/20 text-green-600 dark:text-green-400' :
                   audit.score >= 50 ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' :
                   'bg-red-500/20 text-red-600 dark:text-red-400'
                 }`}>
                   {Math.round(audit.score)}
+                </span>
+              ) : (
+                <span class="flex items-center justify-center text-red-600 dark:text-red-400" title="Critical issue - requires attention">
+                  <AlertCircle size={16} />
                 </span>
               )}
               <button
@@ -1080,7 +1357,12 @@ function AuditDetails({ category, audits }) {
             </div>
           )}
         </div>
-      ))}
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

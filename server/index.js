@@ -204,11 +204,19 @@ app.post('/api/analyze', async (req, res) => {
           }
           
           const refs = report.categories[categoryId].auditRefs;
-          console.log(`Category ${categoryId}: processing ${refs.length} refs`);
+          console.log(`\n=== [${categoryId}] Processing ${refs.length} auditRefs ===`);
+          
+          // Log first few refs to see structure
+          if (refs.length > 0) {
+            console.log(`[${categoryId}] Sample auditRef structure:`, JSON.stringify(refs[0], null, 2));
+          }
 
           const results = refs.map(ref => {
               const audit = report.audits[ref.id];
-              if (!audit) return null;
+              if (!audit) {
+                console.log(`[${categoryId}] WARNING: Audit ${ref.id} not found in report.audits`);
+                return null;
+              }
               
               // Log scores for debugging
               if (audit.score !== 1 && audit.score !== null) {
@@ -227,7 +235,62 @@ app.post('/api/analyze', async (req, res) => {
                  }
               }
               
-              return {
+              // Log the ref object structure
+              console.log(`[${categoryId}] Processing auditRef for ${ref.id}:`, {
+                id: ref.id,
+                weight: ref.weight,
+                group: ref.group,
+                acronym: ref.acronym,
+                hasGroup: 'group' in ref,
+                refKeys: Object.keys(ref)
+              });
+              
+              // Filter out hidden groups (these are internal/not meant to be displayed)
+              if (ref.group === 'hidden') {
+                console.log(`[${categoryId}] Filtering out hidden audit: ${ref.id}`);
+                return null;
+              }
+              
+              // Get group from auditRef - this is the source of truth from Lighthouse categories
+              let group = ref.group;
+              
+              // Detailed logging for group extraction
+              console.log(`[${categoryId}] Group extraction for ${ref.id}:`, {
+                'ref.group': ref.group,
+                'ref.group type': typeof ref.group,
+                'ref.group === undefined': ref.group === undefined,
+                'ref.group === null': ref.group === null,
+                'ref.group === ""': ref.group === '',
+                'audit.scoreDisplayMode': audit.scoreDisplayMode,
+                'audit.details?.type': audit.details?.type
+              });
+              
+              // Log if group is missing for debugging
+              if (!group) {
+                console.log(`[${categoryId}] ⚠️  WARNING: Audit ${ref.id} has no group defined in auditRef!`);
+                console.log(`[${categoryId}] Full ref object:`, JSON.stringify(ref, null, 2));
+                // Infer group based on scoreDisplayMode or other properties as fallback
+                if (audit.scoreDisplayMode === 'numeric' || audit.scoreDisplayMode === 'metricSavings') {
+                  group = 'metrics';
+                  console.log(`[${categoryId}] → Inferred as 'metrics' (scoreDisplayMode: ${audit.scoreDisplayMode})`);
+                } else if (audit.details && audit.details.type === 'opportunity') {
+                  group = 'diagnostics';
+                  console.log(`[${categoryId}] → Inferred as 'diagnostics' (details.type: opportunity)`);
+                } else {
+                  group = 'other';
+                  console.log(`[${categoryId}] → Fallback to 'other'`);
+                }
+              } else {
+                console.log(`[${categoryId}] ✓ Using group from auditRef: "${group}"`);
+              }
+              
+              // Ensure group is always set
+              if (!group) {
+                console.error(`[${categoryId}] ❌ ERROR: No group found for audit ${ref.id}. ref object:`, JSON.stringify(ref));
+                group = 'other'; // Fallback
+              }
+              
+              const result = {
                 id: ref.id,
                 title: audit.title,
                 description: audit.description,
@@ -236,11 +299,22 @@ app.post('/api/analyze', async (req, res) => {
                 displayValue: audit.displayValue,
                 details: audit.details,
                 warnings: audit.warnings,
+                group: group, // This should always be set now
               };
+              
+              console.log(`[${categoryId}] ✓ Final result for ${ref.id}: group = "${result.group}"`);
+              
+              return result;
             })
             .filter(audit => audit !== null);
             
-          console.log(`Category ${categoryId}: found ${results.length} issues`);
+          // Log group distribution
+          const groupCounts = {};
+          results.forEach(audit => {
+            groupCounts[audit.group] = (groupCounts[audit.group] || 0) + 1;
+          });
+          console.log(`[${categoryId}] ✓ Found ${results.length} issues. Group distribution:`, groupCounts);
+          console.log(`[${categoryId}] Sample results with groups:`, results.slice(0, 3).map(a => ({ id: a.id, group: a.group })));
           
           return results.sort((a, b) => {
               if (a.score !== null && b.score !== null) return a.score - b.score;

@@ -82,13 +82,42 @@ export default async function handler(req, res) {
       }
       
       const refs = report.categories[categoryId].auditRefs;
+      console.log(`\n=== [API ${categoryId}] Processing ${refs.length} auditRefs ===`);
+      
       const results = refs.map(ref => {
           const audit = report.audits[ref.id];
-          if (!audit) return null;
+          if (!audit) {
+            console.log(`[API ${categoryId}] WARNING: Audit ${ref.id} not found`);
+            return null;
+          }
           
           if (audit.score === 1) return null;
           if (audit.score === null && ['notApplicable', 'informative'].includes(audit.scoreDisplayMode)) {
             return null;
+          }
+          
+          // Filter out hidden groups (these are internal/not meant to be displayed)
+          if (ref.group === 'hidden') {
+            console.log(`[API ${categoryId}] Filtering out hidden audit: ${ref.id}`);
+            return null;
+          }
+          
+          // Get group from auditRef - this is the source of truth from Lighthouse categories
+          let group = ref.group;
+          
+          console.log(`[API ${categoryId}] ${ref.id}: ref.group = ${JSON.stringify(ref.group)}, type = ${typeof ref.group}`);
+          
+          // If group is missing, infer based on scoreDisplayMode or other properties as fallback
+          if (!group) {
+            console.log(`[API ${categoryId}] ⚠️  No group for ${ref.id}, inferring...`);
+            if (audit.scoreDisplayMode === 'numeric' || audit.scoreDisplayMode === 'metricSavings') {
+              group = 'metrics';
+            } else if (audit.details && audit.details.type === 'opportunity') {
+              group = 'diagnostics';
+            } else {
+              group = 'other';
+            }
+            console.log(`[API ${categoryId}] → Inferred group: ${group}`);
           }
           
           return {
@@ -100,6 +129,7 @@ export default async function handler(req, res) {
             displayValue: audit.displayValue,
             details: audit.details,
             warnings: audit.warnings,
+            group: group,
           };
         })
         .filter(audit => audit !== null)
@@ -109,6 +139,13 @@ export default async function handler(req, res) {
           if (b.score === null) return -1;
           return a.title.localeCompare(b.title);
         });
+      
+      // Log group distribution
+      const groupCounts = {};
+      results.forEach(audit => {
+        groupCounts[audit.group] = (groupCounts[audit.group] || 0) + 1;
+      });
+      console.log(`[API ${categoryId}] ✓ Found ${results.length} issues. Group distribution:`, groupCounts);
       
       return results;
     };
