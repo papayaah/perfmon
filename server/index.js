@@ -6,25 +6,21 @@ import { createServer } from 'net';
 import { writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { RequestQueue } from './queue.js';
-import { statsTracker } from './stats.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-// Initialize request queue with environment variables
-const MAX_CONCURRENT_ANALYSES = parseInt(process.env.MAX_CONCURRENT_ANALYSES) || 1;
-const MAX_QUEUE_SIZE = parseInt(process.env.MAX_QUEUE_SIZE) || 10;
-const QUEUE_TIMEOUT_MS = parseInt(process.env.QUEUE_TIMEOUT_MS) || 120000;
+// Worker ID for Docker deployments (optional for local)
+const WORKER_ID = process.env.WORKER_ID || 'local';
+const IS_DOCKER = process.env.WORKER_ID !== undefined;
 
-const requestQueue = new RequestQueue(MAX_CONCURRENT_ANALYSES, MAX_QUEUE_SIZE);
+// Track if worker is currently busy (for Docker queue manager)
+let isBusy = false;
+let currentAnalysis = null;
 
-console.log(`Request queue initialized: maxConcurrent=${MAX_CONCURRENT_ANALYSES}, maxQueueSize=${MAX_QUEUE_SIZE}, timeout=${QUEUE_TIMEOUT_MS}ms`);
+console.log(`🚀 Lighthouse Server ${WORKER_ID} starting...`);
 
-// Initialize stats tracker
-await statsTracker.init();
-
-// Find an available port starting from the preferred port
+// Find an available port starting from the preferred port (local dev only)
 async function findAvailablePort(startPort = 3001, maxAttempts = 10) {
   for (let port = startPort; port < startPort + maxAttempts; port++) {
     const isAvailable = await new Promise((resolve) => {
@@ -41,58 +37,80 @@ async function findAvailablePort(startPort = 3001, maxAttempts = 10) {
   throw new Error(`No available port found between ${startPort} and ${startPort + maxAttempts - 1}`);
 }
 
-// Write port to a file so Vite can read it
+// Write port to a file so Vite can read it (local dev only)
 function writePortFile(port) {
   const portFilePath = join(__dirname, '..', '.server-port');
   writeFileSync(portFilePath, String(port));
   console.log(`Server port written to ${portFilePath}`);
 }
 
+// Validate and normalize URL
+function validateAndNormalizeUrl(url) {
+  if (!url || typeof url !== 'string') {
+    throw new Error('URL must be a non-empty string');
+  }
+
+  // Trim whitespace
+  url = url.trim();
+
+  // If URL doesn't start with http:// or https://, add https://
+  if (!/^https?:\/\//i.test(url)) {
+    url = `https://${url}`;
+  }
+
+  // Validate URL format
+  try {
+    const urlObj = new URL(url);
+    
+    // Ensure we have a valid protocol
+    if (!['http:', 'https:'].includes(urlObj.protocol)) {
+      throw new Error('URL must use http:// or https:// protocol');
+    }
+
+    // Ensure we have a hostname
+    if (!urlObj.hostname) {
+      throw new Error('URL must have a valid hostname');
+    }
+
+    return urlObj.href;
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(`Invalid URL format: ${url}`);
+    }
+    throw error;
+  }
+}
+
 app.use(cors());
 app.use(express.json());
 
-// Health check endpoint for DigitalOcean
+// Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// Queue statistics endpoint
-app.get('/api/queue-stats', (req, res) => {
-  const queueStats = requestQueue.getStats();
-  const globalStats = statsTracker.getStats();
   res.json({
-    ...queueStats,
-    totalAnalyses: globalStats.totalAnalyses,
-    totalRequests: globalStats.totalRequests
+    status: 'ok',
+    workerId: WORKER_ID,
+    busy: isBusy,
+    currentAnalysis: currentAnalysis,
+    timestamp: new Date().toISOString()
   });
 });
 
-// Global statistics endpoint
-app.get('/api/stats', (req, res) => {
-  const stats = statsTracker.getStats();
-  res.json(stats);
+// Worker status endpoint (for Docker queue manager)
+app.get('/status', (req, res) => {
+  res.json({
+    workerId: WORKER_ID,
+    busy: isBusy,
+    currentAnalysis: currentAnalysis,
+    uptime: process.uptime(),
+    memory: process.memoryUsage()
+  });
 });
 
-// Queue position endpoint
-app.get('/api/queue-position/:requestId', (req, res) => {
-  const { requestId } = req.params;
-  
-  const position = requestQueue.getRequestPosition(requestId);
-  
-  if (!position) {
-    return res.status(404).json({ 
-      error: 'Request not found',
-      message: 'The specified request ID was not found in the queue or may have already completed.'
-    });
-  }
-  
-  res.json(position);
-});
-
+// Main analysis endpoint
 app.post('/api/analyze', async (req, res) => {
-  const { url, deviceType = 'desktop' } = req.body;
+  const { url: rawUrl, deviceType = 'desktop' } = req.body;
 
-  if (!url) {
+  if (!rawUrl) {
     return res.status(400).json({ error: 'URL is required' });
   }
 
@@ -100,379 +118,299 @@ app.post('/api/analyze', async (req, res) => {
     return res.status(400).json({ error: 'deviceType must be "mobile" or "desktop"' });
   }
 
-  // Increment total requests counter
-  await statsTracker.incrementRequests();
-
+  // Validate and normalize URL
+  let url;
   try {
-    console.log(`[Queue] Request received for ${url} (${deviceType}). Current queue: ${requestQueue.getStats().activeCount} active, ${requestQueue.getStats().queueLength} waiting`);
-    
-    // Wrap the analysis logic in queue.add()
-    const { result, requestId } = await requestQueue.add(async () => {
-      let chrome;
-      try {
-        console.log(`Starting ${deviceType} analysis for: ${url}`);
-        
-        // Use different Chrome flags based on environment
-        const isProduction = process.env.NODE_ENV === 'production';
-        const chromeFlags = [
-          '--headless',
-          '--no-sandbox',
-          '--disable-gpu',
-          '--disable-dev-shm-usage',
-          '--disable-setuid-sandbox',
-          '--no-first-run',
-          '--disable-extensions',
-          '--disable-default-apps',
-          '--disable-sync',
-          '--mute-audio'
-        ];
-        
-        // Add aggressive flags only in production (DigitalOcean)
-        if (isProduction) {
-          chromeFlags.push(
-            '--single-process',
-            '--no-zygote',
-            '--disable-software-rasterizer',
-            '--disable-background-networking',
-            '--metrics-recording-only',
-            '--no-default-browser-check',
-            '--safebrowsing-disable-auto-update',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding',
-            '--disable-ipc-flooding-protection'
-          );
-        }
-        
-        chrome = await chromeLauncher.launch({ chromeFlags });
-        
-        // Use the appropriate config based on device type
-        // For desktop, we use the desktop preset
-        // For mobile, we use the default (which is mobile)
-        
-        let config;
-        
-        if (deviceType === 'desktop') {
-          // Load desktop config
-          const desktopConfig = await import('lighthouse/core/config/desktop-config.js');
-          config = desktopConfig.default;
-        } else {
-          // Load default config (mobile)
-          const defaultConfig = await import('lighthouse/core/config/default-config.js');
-          config = defaultConfig.default;
-        }
-        
-        // Deep clone to avoid mutating the imported config
-        config = JSON.parse(JSON.stringify(config));
-        
-        // Apply our specific settings
-        config.settings = {
-          ...config.settings,
-          onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
-          // Ensure we capture the full page screenshot for our thumbnail fallback
-          disableFullPageScreenshot: false,
-        };
-        
-        const options = {
-          logLevel: 'info',
-          output: 'json',
-          port: chrome.port,
-        };
-        
-        // Add hard timeout wrapper to prevent hanging
-        const lighthouseTimeout = 90000; // 90 seconds max for Lighthouse itself
-        const runnerResult = await Promise.race([
-          lighthouse(url, options, config),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Lighthouse execution timeout')), lighthouseTimeout)
-          )
-        ]);
-        const report = JSON.parse(runnerResult.report);
+    url = validateAndNormalizeUrl(rawUrl);
+  } catch (error) {
+    return res.status(400).json({ 
+      error: 'Invalid URL',
+      details: error.message,
+      hint: 'URL must include a protocol (http:// or https://) or be a valid domain name'
+    });
+  }
 
-        const scores = {
-          performance: report.categories.performance ? report.categories.performance.score * 100 : 0,
-          accessibility: report.categories.accessibility ? report.categories.accessibility.score * 100 : 0,
-          bestPractices: report.categories['best-practices'] ? report.categories['best-practices'].score * 100 : 0,
-          seo: report.categories.seo ? report.categories.seo.score * 100 : 0,
-        };
+  // Reject if already busy (Docker mode - queue manager handles queuing)
+  if (IS_DOCKER && isBusy) {
+    return res.status(503).json({
+      error: 'Worker busy',
+      message: `Worker ${WORKER_ID} is currently processing another analysis`,
+      workerId: WORKER_ID,
+      currentAnalysis: currentAnalysis
+    });
+  }
 
-        // Extract audit details for each category
-        const extractAudits = (categoryId) => {
-          if (!report.categories[categoryId] || !report.categories[categoryId].auditRefs) {
-            console.log(`No auditRefs found for category: ${categoryId}`);
-            return [];
+  // Mark as busy
+  isBusy = true;
+  currentAnalysis = { url, deviceType, startTime: new Date().toISOString() };
+
+  let chrome;
+  try {
+    console.log(`[${WORKER_ID}] Starting ${deviceType} analysis for: ${url}`);
+
+    // Chrome flags - optimized for both local and Docker
+    // IMPORTANT: Do NOT use --single-process or --no-zygote as they break the DevTools websocket
+    const chromeFlags = [
+      '--headless=new',                    // Use new headless mode (more stable)
+      '--no-sandbox',                      // Required for Docker
+      '--disable-gpu',                     // No GPU in container
+      '--disable-dev-shm-usage',           // Use /tmp instead of /dev/shm
+      '--disable-setuid-sandbox',          // Required for Docker
+      '--no-first-run',                    // Skip first run wizard
+      '--disable-extensions',              // No extensions needed
+      '--disable-background-networking',   // Reduce network overhead
+      '--disable-default-apps',            // No default apps
+      '--disable-sync',                    // No sync
+      '--disable-translate',               // No translate
+      '--mute-audio',                      // No audio
+      '--hide-scrollbars',                 // Cleaner screenshots
+      '--metrics-recording-only',          // Minimal metrics
+      '--safebrowsing-disable-auto-update', // No safe browsing updates
+      '--disable-blink-features=AutomationControlled', // Hide automation flag
+      '--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+    ];
+
+    chrome = await chromeLauncher.launch({
+      chromeFlags,
+      handleSIGINT: false,
+      chromePath: process.env.CHROME_PATH,
+      connectionPollInterval: 500,
+      maxConnectionRetries: 50,
+      logLevel: 'info'
+    });
+
+    console.log(`[${WORKER_ID}] Chrome launched on port ${chrome.port}`);
+
+    // Small delay to ensure Chrome is fully ready
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Configure Lighthouse based on device type
+    let config;
+
+    if (deviceType === 'desktop') {
+      const desktopConfig = await import('lighthouse/core/config/desktop-config.js');
+      config = desktopConfig.default;
+    } else {
+      const defaultConfig = await import('lighthouse/core/config/default-config.js');
+      config = defaultConfig.default;
+    }
+
+    // Deep clone to avoid mutating the imported config
+    config = JSON.parse(JSON.stringify(config));
+
+    // Apply our specific settings
+    config.settings = {
+      ...config.settings,
+      onlyCategories: ['performance', 'accessibility', 'best-practices', 'seo'],
+      disableFullPageScreenshot: false,
+    };
+
+    const options = {
+      logLevel: 'info',
+      output: 'json',
+      port: chrome.port,
+    };
+
+    // Run Lighthouse with timeout
+    const lighthouseTimeout = 90000; // 90 seconds max
+    const runnerResult = await Promise.race([
+      lighthouse(url, options, config),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Lighthouse execution timeout')), lighthouseTimeout)
+      )
+    ]);
+
+    const report = JSON.parse(runnerResult.report);
+
+    // Check for runtime errors (e.g., page couldn't be loaded)
+    const runtimeError = report.runtimeError;
+    if (runtimeError) {
+      console.error(`[${WORKER_ID}] Lighthouse runtime error:`, runtimeError);
+      throw new Error(`Page load failed: ${runtimeError.message || runtimeError.code || 'ERRORED_DOCUMENT_REQUEST'}`);
+    }
+
+    // If all scores are null/0, the page likely didn't load
+    const allScoresZero = !report.categories.performance?.score
+      && !report.categories.accessibility?.score
+      && !report.categories['best-practices']?.score
+      && !report.categories.seo?.score;
+
+    if (allScoresZero) {
+      console.error(`[${WORKER_ID}] All scores are zero - page may have blocked the request`);
+      throw new Error('Page could not be analyzed. The site may be blocking requests from this server, or the URL may be invalid.');
+    }
+
+    // Extract scores
+    const scores = {
+      performance: report.categories.performance ? report.categories.performance.score * 100 : 0,
+      accessibility: report.categories.accessibility ? report.categories.accessibility.score * 100 : 0,
+      bestPractices: report.categories['best-practices'] ? report.categories['best-practices'].score * 100 : 0,
+      seo: report.categories.seo ? report.categories.seo.score * 100 : 0,
+    };
+
+    // Extract audits
+    const extractAudits = (categoryId) => {
+      if (!report.categories[categoryId] || !report.categories[categoryId].auditRefs) {
+        return [];
+      }
+
+      return report.categories[categoryId].auditRefs
+        .map(ref => {
+          const audit = report.audits[ref.id];
+          if (!audit) return null;
+
+          // Filter out passed audits (score 1)
+          if (audit.score === 1) return null;
+
+          // Filter out informational/notApplicable audits
+          if (audit.score === null) {
+            if (['notApplicable', 'informative'].includes(audit.scoreDisplayMode)) {
+              return null;
+            }
           }
-          
-          const refs = report.categories[categoryId].auditRefs;
-          console.log(`\n=== [${categoryId}] Processing ${refs.length} auditRefs ===`);
-          
-          // Log first few refs to see structure
-          if (refs.length > 0) {
-            console.log(`[${categoryId}] Sample auditRef structure:`, JSON.stringify(refs[0], null, 2));
+
+          // Filter out hidden groups
+          if (ref.group === 'hidden') return null;
+
+          // Get group from auditRef with fallback inference
+          let group = ref.group;
+          if (!group) {
+            if (audit.scoreDisplayMode === 'numeric' || audit.scoreDisplayMode === 'metricSavings') {
+              group = 'metrics';
+            } else if (audit.details && audit.details.type === 'opportunity') {
+              group = 'diagnostics';
+            } else {
+              group = 'other';
+            }
           }
 
-          const results = refs.map(ref => {
-              const audit = report.audits[ref.id];
-              if (!audit) {
-                console.log(`[${categoryId}] WARNING: Audit ${ref.id} not found in report.audits`);
-                return null;
-              }
-              
-              // Log scores for debugging
-              if (audit.score !== 1 && audit.score !== null) {
-                 console.log(`[${categoryId}] Found issue: ${audit.id}, score: ${audit.score}`);
-              } else if (audit.score === null && !['notApplicable', 'informative'].includes(audit.scoreDisplayMode)) {
-                 console.log(`[${categoryId}] Found potential issue (null score): ${audit.id}, mode: ${audit.scoreDisplayMode}`);
-              }
-
-              // Filter out passed audits (score 1)
-              if (audit.score === 1) return null;
-              
-              // Filter out informational/notApplicable audits
-              if (audit.score === null) {
-                 if (['notApplicable', 'informative'].includes(audit.scoreDisplayMode)) {
-                   return null;
-                 }
-              }
-              
-              // Log the ref object structure
-              console.log(`[${categoryId}] Processing auditRef for ${ref.id}:`, {
-                id: ref.id,
-                weight: ref.weight,
-                group: ref.group,
-                acronym: ref.acronym,
-                hasGroup: 'group' in ref,
-                refKeys: Object.keys(ref)
-              });
-              
-              // Filter out hidden groups (these are internal/not meant to be displayed)
-              if (ref.group === 'hidden') {
-                console.log(`[${categoryId}] Filtering out hidden audit: ${ref.id}`);
-                return null;
-              }
-              
-              // Get group from auditRef - this is the source of truth from Lighthouse categories
-              let group = ref.group;
-              
-              // Detailed logging for group extraction
-              console.log(`[${categoryId}] Group extraction for ${ref.id}:`, {
-                'ref.group': ref.group,
-                'ref.group type': typeof ref.group,
-                'ref.group === undefined': ref.group === undefined,
-                'ref.group === null': ref.group === null,
-                'ref.group === ""': ref.group === '',
-                'audit.scoreDisplayMode': audit.scoreDisplayMode,
-                'audit.details?.type': audit.details?.type
-              });
-              
-              // Log if group is missing for debugging
-              if (!group) {
-                console.log(`[${categoryId}] ⚠️  WARNING: Audit ${ref.id} has no group defined in auditRef!`);
-                console.log(`[${categoryId}] Full ref object:`, JSON.stringify(ref, null, 2));
-                // Infer group based on scoreDisplayMode or other properties as fallback
-                if (audit.scoreDisplayMode === 'numeric' || audit.scoreDisplayMode === 'metricSavings') {
-                  group = 'metrics';
-                  console.log(`[${categoryId}] → Inferred as 'metrics' (scoreDisplayMode: ${audit.scoreDisplayMode})`);
-                } else if (audit.details && audit.details.type === 'opportunity') {
-                  group = 'diagnostics';
-                  console.log(`[${categoryId}] → Inferred as 'diagnostics' (details.type: opportunity)`);
-                } else {
-                  group = 'other';
-                  console.log(`[${categoryId}] → Fallback to 'other'`);
-                }
-              } else {
-                console.log(`[${categoryId}] ✓ Using group from auditRef: "${group}"`);
-              }
-              
-              // Ensure group is always set
-              if (!group) {
-                console.error(`[${categoryId}] ❌ ERROR: No group found for audit ${ref.id}. ref object:`, JSON.stringify(ref));
-                group = 'other'; // Fallback
-              }
-              
-              const result = {
-                id: ref.id,
-                title: audit.title,
-                description: audit.description,
-                score: audit.score !== null ? audit.score * 100 : null,
-                scoreDisplayMode: audit.scoreDisplayMode,
-                displayValue: audit.displayValue,
-                details: audit.details,
-                warnings: audit.warnings,
-                group: group, // This should always be set now
-              };
-              
-              console.log(`[${categoryId}] ✓ Final result for ${ref.id}: group = "${result.group}"`);
-              
-              return result;
-            })
-            .filter(audit => audit !== null);
-            
-          // Log group distribution
-          const groupCounts = {};
-          results.forEach(audit => {
-            groupCounts[audit.group] = (groupCounts[audit.group] || 0) + 1;
-          });
-          console.log(`[${categoryId}] ✓ Found ${results.length} issues. Group distribution:`, groupCounts);
-          console.log(`[${categoryId}] Sample results with groups:`, results.slice(0, 3).map(a => ({ id: a.id, group: a.group })));
-          
-          return results.sort((a, b) => {
-              if (a.score !== null && b.score !== null) return a.score - b.score;
-              if (a.score === null) return 1;
-              if (b.score === null) return -1;
-              return a.title.localeCompare(b.title);
-            });
-        };
-
-        const audits = {
-          performance: extractAudits('performance'),
-          accessibility: extractAudits('accessibility'),
-          bestPractices: extractAudits('best-practices'), // Note: category ID is 'best-practices' but we use camelCase in response
-          seo: extractAudits('seo'),
-        };
-        
-        // Log summary
-        console.log('Audits summary:', {
-          performance: audits.performance.length,
-          accessibility: audits.accessibility.length,
-          bestPractices: audits.bestPractices.length,
-          seo: audits.seo.length,
+          return {
+            id: ref.id,
+            title: audit.title,
+            description: audit.description,
+            score: audit.score !== null ? audit.score * 100 : null,
+            scoreDisplayMode: audit.scoreDisplayMode,
+            displayValue: audit.displayValue,
+            details: audit.details,
+            group: group
+          };
+        })
+        .filter(audit => audit !== null)
+        .sort((a, b) => {
+          if (a.score !== null && b.score !== null) return a.score - b.score;
+          if (a.score === null) return 1;
+          if (b.score === null) return -1;
+          return a.title.localeCompare(b.title);
         });
+    };
 
-        // Extract screenshot thumbnail from the report
-        // Lighthouse includes final-screenshot audit by default
-        let thumbnail = null;
-        
-        try {
-          // Try final-screenshot audit first (Lighthouse default)
-          if (report.audits && report.audits['final-screenshot']) {
-            const finalScreenshot = report.audits['final-screenshot'];
-            if (finalScreenshot.details && finalScreenshot.details.type === 'screenshot') {
-              const screenshotData = finalScreenshot.details.data;
-              if (screenshotData) {
-                // Lighthouse provides base64 data, ensure it has data URI prefix
-                thumbnail = screenshotData.startsWith('data:') ? screenshotData : `data:image/jpeg;base64,${screenshotData}`;
-              }
-            }
-          }
-          
-          // Fallback: Try full-page-screenshot
-          if (!thumbnail && report.fullPageScreenshot && report.fullPageScreenshot.screenshot) {
-            const screenshotData = report.fullPageScreenshot.screenshot.data;
-            if (screenshotData) {
-              thumbnail = screenshotData.startsWith('data:') ? screenshotData : `data:image/png;base64,${screenshotData}`;
-            }
-          }
-          
-          // Alternative: Check audits for full-page-screenshot
-          if (!thumbnail && report.audits && report.audits['full-page-screenshot']) {
-            const fullPage = report.audits['full-page-screenshot'];
-            if (fullPage.details && fullPage.details.screenshot && fullPage.details.screenshot.data) {
-              const screenshotData = fullPage.details.screenshot.data;
-              thumbnail = screenshotData.startsWith('data:') ? screenshotData : `data:image/png;base64,${screenshotData}`;
-            }
-          }
-        } catch (screenshotError) {
-          console.warn('Could not extract screenshot:', screenshotError.message);
-          // Screenshot is optional - continue without it
-        }
+    const audits = {
+      performance: extractAudits('performance'),
+      accessibility: extractAudits('accessibility'),
+      bestPractices: extractAudits('best-practices'),
+      seo: extractAudits('seo'),
+    };
 
-        console.log(`${deviceType} analysis complete`, scores);
-        
-        return { 
-          url, 
-          deviceType,
-          timestamp: new Date().toISOString(),
-          scores,
-          thumbnail,
-          audits 
-        };
-
-      } catch (error) {
-        console.error('Lighthouse error:', error);
-        throw error;
-      } finally {
-        if (chrome) {
-          try {
-            await chrome.kill();
-            console.log('Chrome process killed successfully');
-          } catch (killError) {
-            console.error('Error killing Chrome:', killError);
-            // Force kill if graceful shutdown fails
-            try {
-              process.kill(chrome.pid, 'SIGKILL');
-            } catch (forceKillError) {
-              console.error('Error force killing Chrome:', forceKillError);
-            }
+    // Extract screenshot thumbnail
+    let thumbnail = null;
+    try {
+      if (report.audits && report.audits['final-screenshot']) {
+        const finalScreenshot = report.audits['final-screenshot'];
+        if (finalScreenshot.details && finalScreenshot.details.type === 'screenshot') {
+          const screenshotData = finalScreenshot.details.data;
+          if (screenshotData) {
+            thumbnail = screenshotData.startsWith('data:') ? screenshotData : `data:image/jpeg;base64,${screenshotData}`;
           }
         }
       }
-    }, QUEUE_TIMEOUT_MS);
 
-    // Increment successful analyses counter
-    await statsTracker.incrementAnalyses();
+      // Fallback: Try full-page-screenshot
+      if (!thumbnail && report.fullPageScreenshot && report.fullPageScreenshot.screenshot) {
+        const screenshotData = report.fullPageScreenshot.screenshot.data;
+        if (screenshotData) {
+          thumbnail = screenshotData.startsWith('data:') ? screenshotData : `data:image/png;base64,${screenshotData}`;
+        }
+      }
+    } catch (screenshotError) {
+      console.warn(`[${WORKER_ID}] Could not extract screenshot:`, screenshotError.message);
+    }
 
-    // Send successful result with requestId
-    res.json({ ...result, requestId });
+    console.log(`[${WORKER_ID}] ${deviceType} analysis complete`, scores);
+
+    const result = {
+      url,
+      deviceType,
+      timestamp: new Date().toISOString(),
+      workerId: WORKER_ID,
+      scores,
+      thumbnail,
+      audits
+    };
+
+    res.json(result);
 
   } catch (error) {
-    // Handle queue full errors with 429 status
-    if (error.message === 'Queue is full') {
-      console.warn('Queue is full, rejecting request');
-      return res.status(429).json({ 
-        error: 'Too many requests', 
-        message: 'The analysis queue is currently full. Please try again later.',
-        queueStats: requestQueue.getStats()
-      });
-    }
-
-    // Handle timeout errors with 408 status
-    if (error.message === 'Request timeout') {
-      console.warn('Request timed out in queue');
-      return res.status(408).json({ 
-        error: 'Request timeout', 
-        message: 'The analysis request timed out. Please try again.',
-        timeout: QUEUE_TIMEOUT_MS
-      });
-    }
-
-    // Handle other errors with 500 status
-    console.error('Analysis error:', error);
-    res.status(500).json({ 
-      error: 'Failed to run Lighthouse', 
-      details: error.message 
+    console.error(`[${WORKER_ID}] Lighthouse error:`, error);
+    res.status(500).json({
+      error: 'Failed to run Lighthouse',
+      details: error.message,
+      workerId: WORKER_ID
     });
+  } finally {
+    // Always cleanup Chrome
+    if (chrome) {
+      try {
+        console.log(`[${WORKER_ID}] Cleaning up Chrome process ${chrome.pid}`);
+        await chrome.kill();
+        console.log(`[${WORKER_ID}] Chrome process killed successfully`);
+
+        // Cleanup delay
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+      } catch (killError) {
+        console.error(`[${WORKER_ID}] Error killing Chrome:`, killError);
+        try {
+          if (chrome.pid) {
+            process.kill(chrome.pid, 'SIGKILL');
+            console.log(`[${WORKER_ID}] Chrome force killed with SIGKILL`);
+          }
+        } catch (forceKillError) {
+          console.error(`[${WORKER_ID}] Error force killing Chrome:`, forceKillError);
+        }
+      }
+    }
+
+    // Mark as available
+    isBusy = false;
+    currentAnalysis = null;
   }
 });
 
-// Add global error handlers to prevent crashes
+// Global error handlers
 process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  // Don't exit - keep server running
+  console.error(`[${WORKER_ID}] Uncaught Exception:`, error);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit - keep server running
+  console.error(`[${WORKER_ID}] Unhandled Rejection:`, reason);
 });
 
-// Start server with auto port detection
+// Start server
 (async () => {
   try {
-    // Use PORT env var for production (DigitalOcean), fallback to auto-detect for local dev
+    // Use PORT env var for Docker, fallback to auto-detect for local dev
     const port = process.env.PORT || await findAvailablePort(3001);
-    
-    // Only write port file in development
+
+    // Only write port file in local development
     if (!process.env.PORT) {
       writePortFile(port);
     }
-    
+
     app.listen(port, '0.0.0.0', () => {
-      console.log(`Lighthouse runner listening at http://0.0.0.0:${port}`);
+      console.log(`🚀 Lighthouse Server ${WORKER_ID} listening at http://0.0.0.0:${port}`);
     });
   } catch (error) {
     console.error('Failed to start server:', error.message);
     process.exit(1);
   }
 })();
-

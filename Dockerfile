@@ -1,31 +1,33 @@
-FROM node:20-slim
+FROM node:22-slim
 
-# Install Chrome dependencies for Lighthouse
+# Install Chrome and dependencies for Lighthouse
 RUN apt-get update && apt-get install -y \
-    chromium \
+    wget \
+    gnupg \
+    ca-certificates \
+    curl \
     fonts-liberation \
     libasound2 \
     libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libatspi2.0-0 \
-    libcups2 \
-    libdbus-1-3 \
     libdrm2 \
-    libgbm1 \
     libgtk-3-0 \
     libnspr4 \
     libnss3 \
-    libwayland-client0 \
     libxcomposite1 \
     libxdamage1 \
-    libxfixes3 \
-    libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
     --no-install-recommends \
+    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
-ENV CHROME_PATH=/usr/bin/chromium
+# Set Chrome path for Lighthouse
+ENV CHROME_PATH=/usr/bin/google-chrome
+# Note: Chrome flags are set in the application code, not here
+# Do NOT use --single-process or --no-zygote as they break DevTools websocket
 
 WORKDIR /app
 
@@ -36,7 +38,7 @@ COPY server/package*.json ./
 RUN npm install --production
 
 # Copy server code
-COPY server/ ./
+COPY server/index.js ./
 
 EXPOSE 8080
 
