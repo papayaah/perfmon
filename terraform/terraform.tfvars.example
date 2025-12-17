@@ -1,0 +1,25 @@
+# Copy this file to terraform.tfvars and fill in your values
+# DO NOT commit terraform.tfvars to version control!
+
+# Server IP address (required)
+server_ip = ""
+
+# Full domain for the service (required)
+# e.g., "perfmon.example.com" or "lighthouse.mysite.org"
+domain = ""
+
+# Path to your SSH private key
+ssh_private_key_path = "~/.ssh/id_rsa"
+
+# Cloudflare DNS (optional)
+# Set to false if you manage DNS elsewhere
+enable_cloudflare_dns = true
+
+# Cloudflare API token (required if enable_cloudflare_dns = true)
+# Create at: https://dash.cloudflare.com/profile/api-tokens
+# Required permissions: Zone:DNS:Edit for your zone
+cloudflare_api_token = ""
+
+# Enable Cloudflare proxy (orange cloud)
+# Set to true for DDoS protection and to hide origin IP
+cloudflare_proxy_enabled = true

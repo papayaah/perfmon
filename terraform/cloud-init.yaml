@@ -1,0 +1,113 @@
+#cloud-config
+
+# Perfmon Server Setup - Ubuntu 24.04
+# Run with: cloud-init clean && cloud-init init
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - ufw
+  - fail2ban
+  - jq
+  - htop
+  - git
+  - nginx
+
+# Create directories
+runcmd:
+  # Install Docker
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  - chmod a+r /etc/apt/keyrings/docker.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+  - apt-get update
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - systemctl enable docker
+  - systemctl start docker
+
+  # Configure nginx
+  - mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+  - rm -f /etc/nginx/sites-enabled/default
+  - systemctl enable nginx
+  - systemctl start nginx
+
+  # Configure firewall
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow ssh
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+
+  # Apply sysctl settings (write_files runs before runcmd, so file exists)
+  - sysctl --system
+
+  # Create service directory
+  - mkdir -p /srv/perfmon/server /srv/perfmon/queue-manager
+
+  # Enable and start fail2ban
+  - systemctl enable fail2ban
+  - systemctl restart fail2ban
+
+# Write configuration files
+write_files:
+  # Fail2ban configuration
+  - path: /etc/fail2ban/jail.local
+    content: |
+      [DEFAULT]
+      bantime = 1h
+      findtime = 10m
+      maxretry = 5
+
+      [sshd]
+      enabled = true
+      port = ssh
+      filter = sshd
+      logpath = /var/log/auth.log
+      maxretry = 3
+      bantime = 24h
+
+      [nginx-http-auth]
+      enabled = true
+
+      [nginx-botsearch]
+      enabled = true
+
+  # File descriptor limits
+  - path: /etc/security/limits.d/docker.conf
+    content: |
+      * soft nofile 65535
+      * hard nofile 65535
+      root soft nofile 65535
+      root hard nofile 65535
+
+  # Kernel parameters for Docker/Chrome performance
+  - path: /etc/sysctl.d/99-perfmon.conf
+    content: |
+      # Network performance
+      net.core.somaxconn = 65535
+      net.core.netdev_max_backlog = 65535
+      net.ipv4.tcp_max_syn_backlog = 65535
+      net.ipv4.ip_local_port_range = 1024 65535
+
+      # Memory management
+      vm.swappiness = 10
+      vm.max_map_count = 262144
+
+      # File handles
+      fs.file-max = 2097152
+      fs.inotify.max_user_watches = 524288
+
+final_message: |
+  Perfmon server setup complete!
+  - Docker: installed
+  - Nginx: installed
+  - Firewall: SSH, 80, 443 open
+  - Fail2ban: active
+  - Deploy path: /srv/perfmon

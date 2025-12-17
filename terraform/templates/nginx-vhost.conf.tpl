@@ -1,0 +1,38 @@
+# Perfmon virtual host configuration
+# ${domain}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${domain};
+
+    # Logging
+    access_log /var/log/nginx/perfmon.access.log;
+    error_log /var/log/nginx/perfmon.error.log;
+
+    # Proxy to Docker container
+    location / {
+        proxy_pass http://127.0.0.1:9001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Long timeout for Lighthouse analyses
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+
+        # Don't buffer responses
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+
+    # Health check endpoint (for monitoring)
+    location /health {
+        proxy_pass http://127.0.0.1:9001/health;
+        proxy_http_version 1.1;
+        access_log off;
+    }
+}

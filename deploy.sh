@@ -2,8 +2,8 @@
 
 # Deploy Lighthouse performance monitor to production
 
-SERVER="root@159.89.201.140"
-DEPLOY_PATH="/opt/perfmon"
+SERVER="root@5.161.60.157"
+DEPLOY_PATH="/srv/perfmon"
 
 echo "🚀 Deploying to $SERVER..."
 
@@ -23,7 +23,7 @@ scp -r queue-manager/ $SERVER:$DEPLOY_PATH/
 
 # Rebuild and restart
 ssh $SERVER << 'EOF'
-cd /opt/perfmon
+cd /srv/perfmon
 
 echo "🛑 Stopping all services..."
 docker compose down --remove-orphans

@@ -7,7 +7,7 @@ services:
     container_name: lighthouse-lb
     restart: unless-stopped
     ports:
-      - "9001:80"
+      - "127.0.0.1:9001:80"  # Internal only, host nginx proxies to this
     volumes:
       - ./nginx-lb.conf:/etc/nginx/nginx.conf:ro
     depends_on:
