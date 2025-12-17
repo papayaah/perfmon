@@ -14,7 +14,7 @@ resource "cloudflare_record" "perfmon" {
   name    = local.subdomain
   content = var.server_ip
   type    = "A"
-  ttl     = 300  # 5 minutes, can be set to 1 for "automatic" if proxied
+  ttl     = var.cloudflare_proxy_enabled ? 1 : 300  # 1 = automatic when proxied
   proxied = var.cloudflare_proxy_enabled
 
   comment = "Perfmon Lighthouse performance monitor"
